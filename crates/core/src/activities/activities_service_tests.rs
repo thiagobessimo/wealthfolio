@@ -6599,6 +6599,7 @@ mod tests {
                 &account_ids,
                 "USD",
                 &account_tracking_modes,
+                &HashMap::new(),
                 Some(start_date),
                 Some(end_date),
             )
@@ -6716,6 +6717,7 @@ mod tests {
                 "scope:transfer",
                 &account_ids,
                 "USD",
+                &HashMap::new(),
                 &HashMap::new(),
                 Some(start_date),
                 Some(end_date),

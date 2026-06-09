@@ -478,4 +478,31 @@ describe("AccountsSummary", () => {
       screen.queryByText(/value return unavailable for transaction-mode/i),
     ).not.toBeInTheDocument();
   });
+
+  it("does not show backend performance warnings on dashboard rows", () => {
+    renderAccountsSummary({
+      accounts: [createAccount({ id: "business", name: "Business Investment" })],
+      valuations: [
+        createValuation({
+          accountId: "business",
+          totalValue: 71438.32,
+        }),
+      ],
+      performanceByAccountId: {
+        business: {
+          pnl: -17013.7,
+          returnValue: -0.1923,
+          dataQuality: {
+            status: "partial",
+            warnings: ["Backend performance warning that belongs outside dashboard rows."],
+            notApplicableReasons: [],
+          },
+        },
+      },
+    });
+
+    expect(screen.getByText("Business Investment")).toBeInTheDocument();
+    expect(screen.getByText("gain-percent:-0.1923")).toBeInTheDocument();
+    expect(screen.queryByText(/backend performance warning/i)).not.toBeInTheDocument();
+  });
 });

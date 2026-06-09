@@ -166,6 +166,20 @@ fn account_tracking_modes_from_map(
         .collect()
 }
 
+fn account_types_from_map(
+    accounts_by_id: &HashMap<String, Account>,
+    account_ids: &[String],
+) -> HashMap<String, String> {
+    account_ids
+        .iter()
+        .filter_map(|account_id| {
+            accounts_by_id
+                .get(account_id)
+                .map(|account| (account.id.clone(), account.account_type.clone()))
+        })
+        .collect()
+}
+
 fn income_account_ids(
     state: &ServiceContext,
     account_ids: &[String],
@@ -637,6 +651,7 @@ pub async fn calculate_performance_history(
             return Ok(result);
         }
         let tracking_modes = account_tracking_modes_from_map(&accounts_by_id, &account_ids);
+        let account_types = account_types_from_map(&accounts_by_id, &account_ids);
         let mut result = state
             .performance_service()
             .calculate_performance_history_for_accounts(
@@ -644,6 +659,7 @@ pub async fn calculate_performance_history(
                 &account_ids,
                 &resolved.base_currency,
                 &tracking_modes,
+                &account_types,
                 start_date_opt,
                 end_date_opt,
             )
@@ -658,7 +674,7 @@ pub async fn calculate_performance_history(
         }
         Ok(result)
     } else {
-        let authoritative_tracking_mode = if item_type == "account" {
+        let (authoritative_tracking_mode, authoritative_account_type) = if item_type == "account" {
             let account = state
                 .account_service()
                 .get_account(&item_id)
@@ -674,9 +690,9 @@ pub async fn calculate_performance_history(
                     end_date_opt,
                 ));
             }
-            Some(account.tracking_mode)
+            (Some(account.tracking_mode), Some(account.account_type))
         } else {
-            tracking_mode_opt
+            (tracking_mode_opt, None)
         };
 
         state
@@ -687,6 +703,7 @@ pub async fn calculate_performance_history(
                 start_date_opt,
                 end_date_opt,
                 authoritative_tracking_mode,
+                authoritative_account_type.as_deref(),
             )
             .await
             .map_err(|e| format!("Failed to calculate performance: {}", e))
@@ -808,6 +825,7 @@ pub async fn calculate_performance_summary(
             return Ok(result);
         }
         let tracking_modes = account_tracking_modes_from_map(&accounts_by_id, &account_ids);
+        let account_types = account_types_from_map(&accounts_by_id, &account_ids);
         let mut result = state
             .performance_service()
             .calculate_performance_summary_for_accounts(
@@ -815,6 +833,7 @@ pub async fn calculate_performance_summary(
                 &account_ids,
                 &resolved.base_currency,
                 &tracking_modes,
+                &account_types,
                 start_date_opt,
                 end_date_opt,
                 profile,
@@ -830,7 +849,7 @@ pub async fn calculate_performance_summary(
         }
         Ok(result)
     } else {
-        let authoritative_tracking_mode = if item_type == "account" {
+        let (authoritative_tracking_mode, authoritative_account_type) = if item_type == "account" {
             let account = state
                 .account_service()
                 .get_account(&item_id)
@@ -846,9 +865,9 @@ pub async fn calculate_performance_summary(
                     end_date_opt,
                 ));
             }
-            Some(account.tracking_mode)
+            (Some(account.tracking_mode), Some(account.account_type))
         } else {
-            tracking_mode_opt
+            (tracking_mode_opt, None)
         };
 
         state
@@ -859,6 +878,7 @@ pub async fn calculate_performance_summary(
                 start_date_opt,
                 end_date_opt,
                 authoritative_tracking_mode,
+                authoritative_account_type.as_deref(),
                 profile,
             )
             .await
@@ -927,6 +947,7 @@ pub async fn get_performance_summaries(
                 &account_ids,
                 &base_currency,
                 &account_tracking_modes_from_map(&accounts_by_id, &account_ids),
+                &account_types_from_map(&accounts_by_id, &account_ids),
                 start_date_opt,
                 end_date_opt,
                 profile,

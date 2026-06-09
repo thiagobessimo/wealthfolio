@@ -7,12 +7,7 @@ import { AccountPurpose } from "@/lib/constants";
 import { performanceHeadlineReturn, performancePeriodPnl } from "@/lib/performance";
 import { QueryKeys } from "@/lib/query-keys";
 import { useSettingsContext } from "@/lib/settings-provider";
-import type {
-  AccountValuation,
-  DateRange,
-  PerformanceDataQuality,
-  PerformanceSummaryScope,
-} from "@/lib/types";
+import type { AccountValuation, DateRange, PerformanceSummaryScope } from "@/lib/types";
 import { useQuery } from "@tanstack/react-query";
 import { GainAmount, GainPercent, PrivacyAmount } from "@wealthfolio/ui";
 import { Button } from "@wealthfolio/ui/components/ui/button";
@@ -40,24 +35,7 @@ interface AccountSummaryDisplayData {
   accountCount?: number;
   accounts?: AccountSummaryDisplayData[];
   displayInAccountCurrency?: boolean;
-  dataQualityMessages?: string[];
 }
-
-const dashboardPerformanceMessages = (
-  dataQuality: PerformanceDataQuality | undefined,
-): string[] => {
-  const messages = dataQuality?.warnings ?? [];
-  return messages.filter((message) => {
-    const m = message.toLowerCase();
-    // Hide annualized-volatility noise, the "excluded accounts" note, and the
-    // technical transfer-group warning (the Health Center owns transfer integrity).
-    return (
-      !m.startsWith("volatility is annualized") &&
-      !m.startsWith("transfer group") &&
-      !m.includes("were excluded")
-    );
-  });
-};
 
 const AccountSummarySkeleton = () => (
   <div className="flex w-full items-center justify-between gap-3">
@@ -147,14 +125,10 @@ const AccountSummaryComponent = React.memo(
       gainPercentToDisplay === null &&
       gainAmountToDisplay !== null &&
       gainAmountToDisplay !== 0;
-    const dataQualityMessages = item.dataQualityMessages ?? [];
-    const hasDataQualityWarning = dataQualityMessages.length > 0;
-    const warningMessages = dataQualityMessages.length
-      ? dataQualityMessages
-      : hasBadData
-        ? ["Return % unavailable - activity history may be inconsistent."]
-        : [];
-    const shouldShowWarning = hasBadData || hasDataQualityWarning;
+    const warningMessages = hasBadData
+      ? ["Return % unavailable - activity history may be inconsistent."]
+      : [];
+    const shouldShowWarning = hasBadData;
     const shouldRenderGainMetrics = gainPercentToDisplay !== null && (isNested || !isZeroGain);
     // Nested rows always show a secondary line for visual consistency —
     // fall back to a "-" placeholder when gain metrics aren't available.
@@ -388,7 +362,6 @@ export const AccountsSummary = React.memo(
 
         const gainLossBaseCurrency = performancePeriodPnl(perf);
         const gainPercent = performanceHeadlineReturn(perf);
-        const dataQualityMessages = dashboardPerformanceMessages(perf?.dataQuality);
 
         return {
           accountName: acc.name,
@@ -404,7 +377,6 @@ export const AccountsSummary = React.memo(
           accountType: acc.accountType,
           accountGroup: acc.group ?? null,
           isGroup: false,
-          dataQualityMessages,
         };
       });
     }, [accounts, latestValuations, performanceSummaries, settings?.baseCurrency]);
@@ -502,7 +474,6 @@ export const AccountsSummary = React.memo(
 
             const totalGainLossAmountBase = performancePeriodPnl(groupPerformance);
             const groupTotalReturnPercentBase = performanceHeadlineReturn(groupPerformance);
-            const dataQualityMessages = dashboardPerformanceMessages(groupPerformance?.dataQuality);
 
             actualGroups.push({
               accountName: groupName,
@@ -517,7 +488,6 @@ export const AccountsSummary = React.memo(
               accountCount: groupAccounts.length,
               accounts: groupAccounts,
               displayInAccountCurrency: false,
-              dataQualityMessages,
             });
           }
         });

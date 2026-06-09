@@ -136,19 +136,6 @@ export function DashboardContent() {
 
   const gainLossAmount = performancePeriodPnl(portfolioPerformance);
   const simpleReturn = performanceHeadlineReturn(portfolioPerformance);
-  // Header notices explain the displayed return (e.g. why TWR is unavailable for this scope).
-  // Data-integrity warnings (invalid transfer groups) are surfaced in the Health Center instead,
-  // and the "excluded accounts" note is intentionally hidden from the headline.
-  const performanceMessages = (portfolioPerformance?.dataQuality.warnings ?? []).filter(
-    (message) => {
-      const m = message.toLowerCase();
-      return (
-        !m.startsWith("volatility is annualized") &&
-        !m.startsWith("transfer group") &&
-        !m.includes("were excluded")
-      );
-    },
-  );
 
   const currentValuation = useMemo(() => {
     return valuationHistory && valuationHistory.length > 0
@@ -193,10 +180,7 @@ export function DashboardContent() {
   return (
     <div className="flex min-h-full flex-col">
       <div className="px-4 pb-1 pt-2 md:px-6 lg:px-8">
-        <PortfolioUpdateTrigger
-          lastCalculatedAt={currentValuation?.calculatedAt}
-          notices={performanceMessages}
-        >
+        <PortfolioUpdateTrigger lastCalculatedAt={currentValuation?.calculatedAt}>
           <div className="flex items-start gap-2">
             <div>
               <Balance
