@@ -110,6 +110,7 @@ async fn create_activity(
     Json(activity): Json<NewActivity>,
 ) -> ApiResult<Json<Activity>> {
     let created = state.activity_service.create_activity(activity).await?;
+    state.health_service.clear_cache().await;
 
     // Domain events handle asset enrichment and portfolio recalculation
     Ok(Json(created))
@@ -120,6 +121,7 @@ async fn update_activity(
     Json(activity): Json<ActivityUpdate>,
 ) -> ApiResult<Json<Activity>> {
     let updated = state.activity_service.update_activity(activity).await?;
+    state.health_service.clear_cache().await;
     // Domain events handle asset enrichment and portfolio recalculation
     Ok(Json(updated))
 }
@@ -132,6 +134,7 @@ async fn save_activities(
         .activity_service
         .bulk_mutate_activities(request)
         .await?;
+    state.health_service.clear_cache().await;
     // Domain events handle asset enrichment and portfolio recalculation
     Ok(Json(result))
 }
@@ -141,6 +144,7 @@ async fn delete_activity(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<Activity>> {
     let deleted = state.activity_service.delete_activity(id).await?;
+    state.health_service.clear_cache().await;
     // Domain events handle portfolio recalculation
     Ok(Json(deleted))
 }
@@ -171,6 +175,7 @@ async fn save_internal_transfer_pair(
         .activity_service
         .save_internal_transfer_pair(request)
         .await?;
+    state.health_service.clear_cache().await;
     Ok(Json(pair))
 }
 
@@ -189,6 +194,7 @@ async fn link_transfer_activities(
         .activity_service
         .link_transfer_activities(body.activity_a_id, body.activity_b_id)
         .await?;
+    state.health_service.clear_cache().await;
     // Domain events handle portfolio recalculation
     Ok(Json(pair))
 }
@@ -201,6 +207,7 @@ async fn unlink_transfer_activities(
         .activity_service
         .unlink_transfer_activities(body.activity_a_id, body.activity_b_id)
         .await?;
+    state.health_service.clear_cache().await;
     // Domain events handle portfolio recalculation
     Ok(Json(pair))
 }
@@ -234,6 +241,7 @@ async fn import_activities(
         .activity_service
         .import_activities(body.activities)
         .await?;
+    state.health_service.clear_cache().await;
     // Domain events handle asset enrichment and portfolio recalculation
     Ok(Json(result))
 }

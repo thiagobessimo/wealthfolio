@@ -20,7 +20,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useTaxonomy } from "@/hooks/use-taxonomies";
 import { QueryKeys } from "@/lib/query-keys";
 import { formatDateISO } from "@/lib/utils";
-import type { Account, TaxonomyCategory } from "@/lib/types";
+import type { Account, ActivityDetails, TaxonomyCategory } from "@/lib/types";
 
 import {
   Button,
@@ -139,6 +139,43 @@ export interface SpendingTransactionsTabHandle {
   openAddForm: () => void;
 }
 
+function isTransferActivityType(activityType: string): boolean {
+  return activityType === ActivityType.TRANSFER_IN || activityType === ActivityType.TRANSFER_OUT;
+}
+
+function toActivityDetails(row: TransactionRowVM, account?: Account): Partial<ActivityDetails> {
+  const activity = row.activity;
+  return {
+    id: activity.id,
+    activityType: activity.activityType as ActivityType,
+    subtype: activity.subtype ?? null,
+    status: activity.status,
+    date: new Date(activity.activityDate),
+    quantity: activity.quantity ?? null,
+    unitPrice: activity.unitPrice ?? null,
+    amount: activity.amount ?? null,
+    fee: activity.fee ?? null,
+    currency: activity.currency,
+    needsReview: activity.needsReview,
+    comment: activity.notes ?? undefined,
+    fxRate: activity.fxRate ?? null,
+    createdAt: new Date(activity.createdAt),
+    updatedAt: new Date(activity.updatedAt),
+    accountId: activity.accountId,
+    accountName: account?.name ?? activity.accountId,
+    accountCurrency: account?.currency ?? activity.currency,
+    assetId: activity.assetId ?? "",
+    assetSymbol: activity.assetId ?? "",
+    sourceSystem: activity.sourceSystem,
+    sourceRecordId: activity.sourceRecordId,
+    sourceGroupId: activity.sourceGroupId,
+    idempotencyKey: activity.idempotencyKey,
+    importRunId: activity.importRunId,
+    isUserModified: activity.isUserModified,
+    metadata: activity.metadata,
+  };
+}
+
 export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>(
   function SpendingTransactionsTab(_, ref) {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -161,10 +198,9 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
     const [editingActivity, setEditingActivity] = useState<TransactionRowVM | undefined>();
     const [showForm, setShowForm] = useState(false);
     const [showTransferForm, setShowTransferForm] = useState(false);
-    const [transferFromAccountId, setTransferFromAccountId] = useState<string | undefined>();
-    const [transferActivityType, setTransferActivityType] = useState<ActivityType>(
-      ActivityType.TRANSFER_OUT,
-    );
+    const [transferFormActivity, setTransferFormActivity] = useState<
+      Partial<ActivityDetails> | undefined
+    >();
     const [transferMatchDialog, setTransferMatchDialog] = useState<{
       open: boolean;
       mode: "link" | "unlink";
@@ -331,12 +367,12 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
     const handleTransferClick = useCallback(
       (accountId: string) => {
         const account = accounts.find((a: Account) => a.id === accountId);
-        setTransferActivityType(
-          isCreditCardAccountType(account?.accountType)
+        setTransferFormActivity({
+          activityType: isCreditCardAccountType(account?.accountType)
             ? ActivityType.TRANSFER_IN
             : ActivityType.TRANSFER_OUT,
-        );
-        setTransferFromAccountId(accountId);
+          accountId,
+        });
         setShowTransferForm(true);
       },
       [accounts],
@@ -344,8 +380,7 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
 
     const handleTransferFormClose = useCallback(() => {
       setShowTransferForm(false);
-      setTransferFromAccountId(undefined);
-      setTransferActivityType(ActivityType.TRANSFER_OUT);
+      setTransferFormActivity(undefined);
     }, []);
     const { data: events = [] } = useSpendingEvents();
     const { data: eventTypes = [] } = useEventTypes();
@@ -597,10 +632,22 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
       [setEventMutation],
     );
 
-    const handleEditRow = useCallback((row: TransactionRowVM) => {
-      setEditingActivity(row);
-      setShowForm(true);
-    }, []);
+    const handleEditRow = useCallback(
+      (row: TransactionRowVM) => {
+        if (isTransferActivityType(row.activity.activityType)) {
+          setEditingActivity(undefined);
+          setShowForm(false);
+          setTransferFormActivity(toActivityDetails(row, accountById.get(row.activity.accountId)));
+          setShowTransferForm(true);
+          return;
+        }
+        setTransferFormActivity(undefined);
+        setShowTransferForm(false);
+        setEditingActivity(row);
+        setShowForm(true);
+      },
+      [accountById],
+    );
     const handleDeleteRow = useCallback((row: TransactionRowVM) => {
       setDeletingIds([row.activity.id]);
       setDeletePreview({
@@ -917,7 +964,7 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
           <ActivityForm
             accounts={transferFormAccounts}
             transferAccounts={transferFormAccounts}
-            activity={{ activityType: transferActivityType, accountId: transferFromAccountId }}
+            activity={transferFormActivity}
             open={showTransferForm}
             onClose={handleTransferFormClose}
             hidePicker

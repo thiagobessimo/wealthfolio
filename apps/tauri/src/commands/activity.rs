@@ -11,6 +11,7 @@ use wealthfolio_core::activities::{
     InternalTransferPairResponse, NewActivity, ParseConfig, ParsedCsvResult, Sort,
     TransferMatchCandidate, TransferMatchCandidateRequest,
 };
+use wealthfolio_core::health::HealthServiceTrait;
 use wealthfolio_core::utils::time_utils::{
     local_date_range_utc_bounds, parse_user_timezone_or_default,
 };
@@ -68,11 +69,13 @@ pub async fn create_activity(
 ) -> Result<Activity, String> {
     debug!("Creating activity...");
     // Domain events handle recalculation and asset enrichment automatically
-    state
+    let created = state
         .activity_service()
         .create_activity(activity)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(created)
 }
 
 #[tauri::command]
@@ -82,11 +85,13 @@ pub async fn update_activity(
 ) -> Result<Activity, String> {
     debug!("Updating activity...");
     // Domain events handle recalculation and asset enrichment automatically
-    state
+    let updated = state
         .activity_service()
         .update_activity(activity)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -96,11 +101,13 @@ pub async fn delete_activity(
 ) -> Result<Activity, String> {
     debug!("Deleting activity...");
     // Domain events handle recalculation automatically
-    state
+    let deleted = state
         .activity_service()
         .delete_activity(activity_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -133,11 +140,13 @@ pub async fn save_internal_transfer_pair(
     state: State<'_, Arc<ServiceContext>>,
 ) -> Result<InternalTransferPairResponse, String> {
     debug!("Saving internal transfer pair...");
-    state
+    let pair = state
         .activity_service()
         .save_internal_transfer_pair(request)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(pair)
 }
 
 #[tauri::command]
@@ -148,11 +157,13 @@ pub async fn link_transfer_activities(
 ) -> Result<(Activity, Activity), String> {
     debug!("Linking transfer activities...");
     // Domain events handle recalculation automatically
-    state
+    let pair = state
         .activity_service()
         .link_transfer_activities(activity_a_id, activity_b_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(pair)
 }
 
 #[tauri::command]
@@ -163,11 +174,13 @@ pub async fn unlink_transfer_activities(
 ) -> Result<(Activity, Activity), String> {
     debug!("Unlinking transfer activities...");
     // Domain events handle recalculation automatically
-    state
+    let pair = state
         .activity_service()
         .unlink_transfer_activities(activity_a_id, activity_b_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(pair)
 }
 
 #[tauri::command]
@@ -184,11 +197,13 @@ pub async fn save_activities(
     );
 
     // Domain events handle recalculation and asset enrichment automatically
-    state
+    let result = state
         .activity_service()
         .bulk_mutate_activities(request)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -302,11 +317,13 @@ pub async fn import_activities(
 ) -> Result<ImportActivitiesResult, String> {
     debug!("Importing {} activities", activities.len());
     // Domain events handle recalculation and asset enrichment automatically
-    state
+    let result = state
         .activity_service()
         .import_activities(activities)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.health_service().clear_cache().await;
+    Ok(result)
 }
 
 #[tauri::command]
