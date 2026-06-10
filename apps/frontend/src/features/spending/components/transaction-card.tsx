@@ -12,15 +12,15 @@ import {
   PrivacyAmount,
 } from "@wealthfolio/ui";
 import type { Account } from "@/lib/types";
-import { ActivityType } from "@/lib/constants";
 import { cn, formatDate } from "@/lib/utils";
 
 import { QuickCategorizePopover } from "./quick-categorize-popover";
 import { QuickEventPopover } from "./quick-event-popover";
-import { getCashActivityLabel } from "../lib/constants";
+import { getCashActivityLabel, getEffectiveCashActivityType } from "../lib/constants";
 import {
   getTransactionDisplay,
   getTransferLinkStatus,
+  isTransferCashActivity,
   type TransactionRowVM,
 } from "../lib/transactions-helpers";
 
@@ -66,8 +66,8 @@ function TransactionCardImpl({
     account?.accountType,
   );
   const accountName = account?.name ?? a.accountId;
-  const isTransfer =
-    a.activityType === ActivityType.TRANSFER_IN || a.activityType === ActivityType.TRANSFER_OUT;
+  const activityType = getEffectiveCashActivityType(a);
+  const isTransfer = isTransferCashActivity(a);
   const transferLinkStatus = getTransferLinkStatus(a);
 
   return (
@@ -101,7 +101,7 @@ function TransactionCardImpl({
           </div>
           <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
             {formatDate(a.activityDate)} · {accountName} ·{" "}
-            {getCashActivityLabel(a.activityType, account?.accountType)}
+            {getCashActivityLabel(activityType, account?.accountType)}
           </div>
         </div>
         <div

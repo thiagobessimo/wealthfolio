@@ -1,6 +1,10 @@
 import type { TaxonomyCategory } from "@/lib/types";
 
-import { getActivitySpendingAmount, isCashActivityIncome } from "./constants";
+import {
+  getActivitySpendingAmount,
+  getEffectiveCashActivityType,
+  isCashActivityIncome,
+} from "./constants";
 import type {
   ActivityTaxonomyAssignment,
   CashActivity,
@@ -56,8 +60,16 @@ export interface TransactionDisplay {
   safeAmount: number;
 }
 
+export function isTransferCashActivity(activity: {
+  activityType: string;
+  activityTypeOverride?: string | null;
+}): boolean {
+  const activityType = getEffectiveCashActivityType(activity);
+  return activityType === "TRANSFER_IN" || activityType === "TRANSFER_OUT";
+}
+
 export function getTransferLinkStatus(activity: CashActivity): TransferLinkStatus | null {
-  if (activity.activityType !== "TRANSFER_IN" && activity.activityType !== "TRANSFER_OUT") {
+  if (!isTransferCashActivity(activity)) {
     return null;
   }
   return activity.transferLinkStatus ?? (activity.sourceGroupId ? "linked" : "unlinked");
@@ -82,12 +94,10 @@ export function getTransactionDisplay(
 
   const spendingAmount = getActivitySpendingAmount(activity, accountType);
   const isOutflow = spendingAmount > 0;
-  const isInternalTransfer =
-    !!activity.sourceGroupId &&
-    (activity.activityType === "TRANSFER_IN" || activity.activityType === "TRANSFER_OUT");
+  const activityType = getEffectiveCashActivityType(activity);
+  const isInternalTransfer = !!activity.sourceGroupId && isTransferCashActivity(activity);
   const isIncome =
-    !isInternalTransfer &&
-    isCashActivityIncome(activity.activityType, accountType, activity.subtype);
+    !isInternalTransfer && isCashActivityIncome(activityType, accountType, activity.subtype);
   const isSaving = false;
   const isRefund = spendingAmount < 0;
   const isNeutral = !isOutflow && !isIncome && !isRefund;

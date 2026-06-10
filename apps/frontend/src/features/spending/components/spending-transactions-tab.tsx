@@ -50,10 +50,12 @@ import type { QuickCategorizeScope } from "./quick-categorize-popover";
 import {
   CASH_ACTIVITY_TYPES,
   CASH_ACTIVITY_TYPE_LABELS,
+  getEffectiveCashActivityType,
   isCreditCardAccountType,
   isSpendingAccountType,
 } from "../lib/constants";
 import {
+  isTransferCashActivity,
   pluralizeActivity,
   stableArr,
   toRowVM,
@@ -139,15 +141,12 @@ export interface SpendingTransactionsTabHandle {
   openAddForm: () => void;
 }
 
-function isTransferActivityType(activityType: string): boolean {
-  return activityType === ActivityType.TRANSFER_IN || activityType === ActivityType.TRANSFER_OUT;
-}
-
 function toActivityDetails(row: TransactionRowVM, account?: Account): Partial<ActivityDetails> {
   const activity = row.activity;
+  const activityType = getEffectiveCashActivityType(activity);
   return {
     id: activity.id,
-    activityType: activity.activityType as ActivityType,
+    activityType: activityType as ActivityType,
     subtype: activity.subtype ?? null,
     status: activity.status,
     date: new Date(activity.activityDate),
@@ -536,7 +535,7 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
         return createActivity({
           idempotencyKey: generateId("manual-duplicate"),
           accountId: a.accountId,
-          activityType: a.activityType,
+          activityType: getEffectiveCashActivityType(a),
           currency: a.currency,
           amount: a.amount,
           activityDate:
@@ -634,7 +633,7 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
 
     const handleEditRow = useCallback(
       (row: TransactionRowVM) => {
-        if (isTransferActivityType(row.activity.activityType)) {
+        if (isTransferCashActivity(row.activity)) {
           setEditingActivity(undefined);
           setShowForm(false);
           setTransferFormActivity(toActivityDetails(row, accountById.get(row.activity.accountId)));
@@ -649,9 +648,10 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
       [accountById],
     );
     const handleDeleteRow = useCallback((row: TransactionRowVM) => {
+      const activityType = getEffectiveCashActivityType(row.activity);
       setDeletingIds([row.activity.id]);
       setDeletePreview({
-        activityType: row.activity.activityType,
+        activityType,
         amount: row.activity.amount ?? null,
         currency: row.activity.currency,
       });

@@ -14,15 +14,15 @@ import {
   TableRow,
 } from "@wealthfolio/ui";
 import type { Account } from "@/lib/types";
-import { ActivityType } from "@/lib/constants";
 import { cn, formatDate } from "@/lib/utils";
 
 import { QuickCategorizePopover } from "./quick-categorize-popover";
 import { QuickEventPopover } from "./quick-event-popover";
-import { getCashActivityLabel } from "../lib/constants";
+import { getCashActivityLabel, getEffectiveCashActivityType } from "../lib/constants";
 import {
   getTransactionDisplay,
   getTransferLinkStatus,
+  isTransferCashActivity,
   type TransactionRowVM,
 } from "../lib/transactions-helpers";
 
@@ -66,8 +66,8 @@ function TransactionRowImpl({
   );
   const accountName = account?.name ?? a.accountId;
   const rowAriaLabel = isSelected ? "Deselect transaction" : "Select transaction";
-  const isTransfer =
-    a.activityType === ActivityType.TRANSFER_IN || a.activityType === ActivityType.TRANSFER_OUT;
+  const activityType = getEffectiveCashActivityType(a);
+  const isTransfer = isTransferCashActivity(a);
   const transferLinkStatus = getTransferLinkStatus(a);
 
   return (
@@ -87,7 +87,7 @@ function TransactionRowImpl({
       </TableCell>
       <TableCell className="hidden md:table-cell">
         <Badge variant="outline" className="text-xs">
-          {getCashActivityLabel(a.activityType, account?.accountType)}
+          {getCashActivityLabel(activityType, account?.accountType)}
         </Badge>
       </TableCell>
       <TableCell className="hidden text-sm lg:table-cell">

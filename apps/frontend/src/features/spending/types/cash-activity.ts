@@ -58,7 +58,7 @@ export interface CashActivity extends Activity {
   assignments: ActivityTaxonomyAssignment[];
   /** Spending event tag from the `activity_events` join. `undefined` when untagged. */
   eventId?: string | null;
-  /** Transfer pair validity for TRANSFER_IN / TRANSFER_OUT rows. */
+  /** Transfer pair validity for effective TRANSFER_IN / TRANSFER_OUT rows. */
   transferLinkStatus?: TransferLinkStatus | null;
 }
 
