@@ -49,6 +49,7 @@ export const COMMANDS: CommandMap = {
   get_asset_lots: { method: "GET", path: "/holdings/lots" },
   get_historical_valuations: { method: "GET", path: "/valuations/history" },
   get_latest_valuations: { method: "GET", path: "/valuations/latest" },
+  get_current_valuation: { method: "POST", path: "/valuations/current/query" },
   get_portfolio_allocations: { method: "POST", path: "/allocations/query" },
   get_holdings_by_allocation: { method: "POST", path: "/allocations/holdings/query" },
   // Snapshot management
@@ -545,6 +546,14 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
       }
       const qs = params.toString();
       if (qs) url += `?${qs}`;
+      break;
+    }
+    case "get_current_valuation": {
+      const { filter, includeAccounts } = (payload ?? {}) as {
+        filter?: unknown;
+        includeAccounts?: boolean;
+      };
+      body = JSON.stringify({ filter, includeAccounts: includeAccounts ?? false });
       break;
     }
     case "get_portfolio_allocations": {
