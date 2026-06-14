@@ -111,6 +111,8 @@ fn ensure_linux_deep_link_registration<R: tauri::Runtime>(app: &tauri::App<R>) {
         return;
     }
 
+    // Deb/RPM installs use the packaged desktop template. If it is absent,
+    // runtime registration covers dev and AppImage-style launches.
     if let Err(err) = app.deep_link().register_all() {
         log::warn!("Failed to register fallback deep link schemes: {}", err);
     }

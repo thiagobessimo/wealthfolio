@@ -2,26 +2,37 @@ export type AuthCallbackPayload =
   | { type: "code"; code: string }
   | { type: "error"; message: string };
 
-const TRUSTED_HOSTED_CALLBACK_HOSTS = new Set([
-  "connect.wealthfolio.app",
-  "connect-staging.wealthfolio.app",
-]);
+interface AuthCallbackParseOptions {
+  appOrigin?: string | null;
+  hostedCallbackUrl?: string | null;
+}
 
 function currentOrigin(): string | null {
   if (typeof window === "undefined") return null;
   return window.location.origin;
 }
 
-function isAllowedAuthCallbackUrl(url: URL, appOrigin: string | null): boolean {
+function isConfiguredHostedCallbackUrl(url: URL, hostedCallbackUrl: string | null): boolean {
+  if (!hostedCallbackUrl) return false;
+
+  try {
+    const callbackUrl = new URL(hostedCallbackUrl);
+    return url.origin === callbackUrl.origin && url.pathname === callbackUrl.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedAuthCallbackUrl(
+  url: URL,
+  appOrigin: string | null,
+  hostedCallbackUrl: string | null,
+): boolean {
   if (url.protocol === "wealthfolio:" && url.hostname === "auth" && url.pathname === "/callback") {
     return true;
   }
 
-  if (
-    url.protocol === "https:" &&
-    TRUSTED_HOSTED_CALLBACK_HOSTS.has(url.hostname) &&
-    url.pathname === "/deeplink"
-  ) {
+  if (isConfiguredHostedCallbackUrl(url, hostedCallbackUrl)) {
     return true;
   }
 
@@ -30,11 +41,14 @@ function isAllowedAuthCallbackUrl(url: URL, appOrigin: string | null): boolean {
 
 export function parseAuthCallbackUrl(
   url: string,
-  appOrigin: string | null = currentOrigin(),
+  options: AuthCallbackParseOptions = {},
 ): AuthCallbackPayload | null {
   try {
     const urlObj = new URL(url);
-    if (!isAllowedAuthCallbackUrl(urlObj, appOrigin)) return null;
+    const appOrigin = options.appOrigin === undefined ? currentOrigin() : options.appOrigin;
+    if (!isAllowedAuthCallbackUrl(urlObj, appOrigin, options.hostedCallbackUrl ?? null)) {
+      return null;
+    }
 
     const hashParams = new URLSearchParams(urlObj.hash.substring(1));
 

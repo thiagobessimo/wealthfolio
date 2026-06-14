@@ -53,6 +53,9 @@ const HOSTED_OAUTH_CALLBACK_URL =
   (import.meta.env.CONNECT_OAUTH_CALLBACK_URL as string) ||
   "https://connect.wealthfolio.app/deeplink";
 
+const parseConfiguredAuthCallbackUrl = (url: string) =>
+  parseAuthCallbackUrl(url, { hostedCallbackUrl: HOSTED_OAUTH_CALLBACK_URL });
+
 interface WealthfolioConnectContextValue {
   isEnabled: boolean;
   isConnected: boolean;
@@ -191,12 +194,16 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
   const [error, setError] = useState<string | null>(null);
 
   const supabaseRef = useRef<SupabaseClient | null>(null);
-  const processedAuthCallbacksRef = useRef<Set<string>>(new Set());
+  const processedAuthCodesRef = useRef<Set<string>>(new Set());
 
   // Initialize Supabase client
   supabaseRef.current ??= createSupabaseClient();
 
   const supabase = supabaseRef.current;
+
+  const clearProcessedAuthCodes = useCallback(() => {
+    processedAuthCodesRef.current.clear();
+  }, []);
 
   // Store tokens: refresh token goes to backend (for cloud API calls) and locally (for session restoration)
   const storeTokens = useCallback(async (session: Session | null) => {
@@ -240,26 +247,24 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
   // Handle auth callback from URL (deep link or web redirect)
   const handleAuthCallback = useCallback(
     async (url: string) => {
-      const payload = parseAuthCallbackUrl(url);
+      const payload = parseConfiguredAuthCallbackUrl(url);
 
       if (!payload) {
         logger.error("Failed to parse auth callback URL - no payload");
         return;
       }
 
-      const callbackKey =
-        payload.type === "code" ? `code:${payload.code}` : `error:${payload.message}`;
-      if (processedAuthCallbacksRef.current.has(callbackKey)) {
-        logger.debug("Skipping duplicate auth callback");
-        return;
-      }
-      processedAuthCallbacksRef.current.add(callbackKey);
-
       if (payload.type === "error") {
         logger.error(`Auth callback error: ${payload.message}`);
         setError(payload.message);
         return;
       }
+
+      if (processedAuthCodesRef.current.has(payload.code)) {
+        logger.debug("Skipping duplicate auth callback code");
+        return;
+      }
+      processedAuthCodesRef.current.add(payload.code);
 
       try {
         const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(
@@ -367,7 +372,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
           if (cancelled) return;
           const url = event.payload;
 
-          const authPayload = parseAuthCallbackUrl(url);
+          const authPayload = parseConfiguredAuthCallbackUrl(url);
           if (authPayload) {
             void handleAuthCallback(url);
           }
@@ -377,7 +382,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         if (cancelled) return;
 
         for (const url of currentUrls) {
-          if (parseAuthCallbackUrl(url)) {
+          if (parseConfiguredAuthCallbackUrl(url)) {
             void handleAuthCallback(url);
           }
         }
@@ -398,7 +403,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
   // This works for both web and desktop (when OAuth happens in webview)
   useEffect(() => {
     const currentUrl = window.location.href;
-    if (parseAuthCallbackUrl(currentUrl)) {
+    if (parseConfiguredAuthCallbackUrl(currentUrl)) {
       void handleAuthCallback(currentUrl);
       // Clean up URL after handling
       window.history.replaceState({}, document.title, window.location.pathname);
@@ -477,6 +482,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
     async (provider: "google" | "apple" | "github") => {
       setIsLoading(true);
       setError(null);
+      clearProcessedAuthCodes();
 
       try {
         const isTauri = isDesktop;
@@ -563,13 +569,14 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         setIsLoading(false);
       }
     },
-    [supabase, handleAuthCallback],
+    [supabase, handleAuthCallback, clearProcessedAuthCodes],
   );
 
   const signInWithMagicLink = useCallback(
     async (email: string) => {
       setIsLoading(true);
       setError(null);
+      clearProcessedAuthCodes();
 
       try {
         const isTauri = isDesktop;
@@ -605,7 +612,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         setIsLoading(false);
       }
     },
-    [supabase],
+    [supabase, clearProcessedAuthCodes],
   );
 
   const verifyOtp = useCallback(
