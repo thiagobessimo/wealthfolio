@@ -8,8 +8,8 @@ use crate::errors::{Error as CoreError, Result as CoreResult, ValidationError};
 use crate::taxonomies::{Category, TaxonomyServiceTrait};
 
 use super::model::{
-    AllocationTarget, AllocationTargetWeight, NewAllocationTarget, NewAllocationTargetWeight,
-    RebalanceGoal, SaveAllocationTargetResult,
+    AllocationTarget, AllocationTargetWeight, BandType, NewAllocationTarget,
+    NewAllocationTargetWeight, RebalanceGoal, SaveAllocationTargetResult,
 };
 use super::validation::{validate_new_target, validate_weights_sum};
 
@@ -188,6 +188,14 @@ impl AllocationTargetService {
             taxonomy_id: input.taxonomy_id,
             trigger_type: input.trigger_type,
             drift_band_bps: input.drift_band_bps,
+            band_type: input
+                .band_type
+                .or_else(|| existing.as_ref().map(|target| target.band_type.clone()))
+                .unwrap_or(BandType::Absolute),
+            relative_factor_bps: input
+                .relative_factor_bps
+                .or_else(|| existing.as_ref().map(|target| target.relative_factor_bps))
+                .unwrap_or(2000),
             rebalance_goal: input
                 .rebalance_goal
                 .or_else(|| {
@@ -271,6 +279,8 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
             taxonomy_id: input.taxonomy_id,
             trigger_type: input.trigger_type,
             drift_band_bps: input.drift_band_bps,
+            band_type: input.band_type.unwrap_or(BandType::Absolute),
+            relative_factor_bps: input.relative_factor_bps.unwrap_or(2000),
             rebalance_goal: input.rebalance_goal.unwrap_or(RebalanceGoal::NearestBand),
             min_trade_amount: input.min_trade_amount.unwrap_or_else(|| "0".to_string()),
             whole_shares_only: input.whole_shares_only.unwrap_or(false),
@@ -311,6 +321,10 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
             taxonomy_id: input.taxonomy_id,
             trigger_type: input.trigger_type,
             drift_band_bps: input.drift_band_bps,
+            band_type: input.band_type.unwrap_or(existing.band_type),
+            relative_factor_bps: input
+                .relative_factor_bps
+                .unwrap_or(existing.relative_factor_bps),
             rebalance_goal: input.rebalance_goal.unwrap_or(existing.rebalance_goal),
             min_trade_amount: input.min_trade_amount.unwrap_or(existing.min_trade_amount),
             whole_shares_only: input
@@ -460,6 +474,8 @@ mod tests {
             taxonomy_id: taxonomy_id.to_string(),
             trigger_type: TriggerType::Threshold,
             drift_band_bps: 500,
+            band_type: BandType::Absolute,
+            relative_factor_bps: 2000,
             rebalance_goal: RebalanceGoal::NearestBand,
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
@@ -478,6 +494,8 @@ mod tests {
             taxonomy_id: taxonomy_id.to_string(),
             trigger_type: TriggerType::Threshold,
             drift_band_bps: 500,
+            band_type: None,
+            relative_factor_bps: None,
             rebalance_goal: Some(RebalanceGoal::NearestBand),
             min_trade_amount: Some("0".to_string()),
             whole_shares_only: Some(false),
