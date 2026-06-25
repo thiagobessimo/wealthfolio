@@ -87,12 +87,6 @@ function getSelectableCashCategoryFromMeta(meta?: string | null): string {
     : CASH_ALLOCATION_DEFAULT_VALUE;
 }
 
-function normalizeCashCategoryInMeta(meta: string | null | undefined): string | null | undefined {
-  const categoryId = getCashCategoryFromMeta(meta);
-  if (!categoryId || categoryId === CASH_FIXED_INCOME_CATEGORY_ID) return meta;
-  return setCashCategoryInMeta(meta, null);
-}
-
 const accountTypes: ResponsiveSelectOption[] = [
   { label: "Securities", value: "SECURITIES" },
   { label: "Cash", value: "CASH" },
@@ -188,27 +182,20 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
   );
 
   function onSubmit(data: AccountFormOutput) {
-    const submitData =
-      data.accountType === AccountType.CASH
-        ? { ...data, meta: normalizeCashCategoryInMeta(data.meta) }
-        : data;
-
     // Check if this is an existing account (update) and mode is switching from HOLDINGS to TRANSACTIONS
-    const isExistingAccount = !!submitData.id;
+    const isExistingAccount = !!data.id;
     const isSwitchingFromHoldingsToTransactions =
-      !needsSetup &&
-      initialTrackingMode === "HOLDINGS" &&
-      submitData.trackingMode === "TRANSACTIONS";
+      !needsSetup && initialTrackingMode === "HOLDINGS" && data.trackingMode === "TRANSACTIONS";
 
     if (isExistingAccount && isSwitchingFromHoldingsToTransactions) {
       // Show confirmation dialog
-      setPendingFormData(submitData);
+      setPendingFormData(data);
       setShowModeConfirmation(true);
       return;
     }
 
     // Otherwise, submit directly
-    doSubmit(submitData);
+    doSubmit(data);
   }
 
   // Handle confirmation dialog actions
