@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
+use crate::accounts::AccountServiceTrait;
 use crate::errors::Result;
 use crate::portfolio::holdings::{Holding, HoldingSummary, HoldingType, HoldingsServiceTrait};
 use crate::taxonomies::{AssetTaxonomyAssignment, Category, TaxonomyServiceTrait};
@@ -77,6 +78,7 @@ pub trait AllocationServiceTrait: Send + Sync {
 pub struct AllocationService {
     holdings_service: Arc<dyn HoldingsServiceTrait>,
     taxonomy_service: Arc<dyn TaxonomyServiceTrait>,
+    account_service: Option<Arc<dyn AccountServiceTrait>>,
 }
 
 impl AllocationService {
@@ -87,7 +89,50 @@ impl AllocationService {
         Self {
             holdings_service,
             taxonomy_service,
+            account_service: None,
         }
+    }
+
+    pub fn with_account_service(mut self, account_service: Arc<dyn AccountServiceTrait>) -> Self {
+        self.account_service = Some(account_service);
+        self
+    }
+
+    fn load_cash_overrides(&self, account_ids: &[String]) -> HashMap<String, String> {
+        let Some(account_service) = &self.account_service else {
+            return HashMap::new();
+        };
+        let Ok(accounts) = account_service.get_accounts_by_ids(account_ids) else {
+            return HashMap::new();
+        };
+        accounts
+            .into_iter()
+            .filter_map(|a| a.cash_allocation_category_id().map(|ov| (a.id, ov)))
+            .collect()
+    }
+
+    async fn get_holdings_for_allocation(
+        &self,
+        account_ids: &[String],
+        base_currency: &str,
+        aggregated_account_id: &str,
+        cash_overrides: &HashMap<String, String>,
+    ) -> Result<Vec<Holding>> {
+        if cash_overrides.is_empty() {
+            return self
+                .holdings_service
+                .get_holdings_for_accounts(account_ids, base_currency, aggregated_account_id)
+                .await;
+        }
+        let mut all_holdings: Vec<Holding> = Vec::new();
+        for account_id in account_ids {
+            let holdings = self
+                .holdings_service
+                .get_holdings(account_id, base_currency)
+                .await?;
+            all_holdings.extend(holdings);
+        }
+        Ok(all_holdings)
     }
 
     fn rollup_to_top_level(taxonomy_id: &str) -> bool {
@@ -157,22 +202,62 @@ impl AllocationService {
         rollup_to_top_level: bool,
         top_level_map: &HashMap<&str, &str>,
         assignments_by_asset: &HashMap<String, Vec<AssetTaxonomyAssignment>>,
+        cash_overrides: &HashMap<String, String>,
     ) -> Vec<HoldingTaxonomyShare> {
         if holding.holding_type == HoldingType::Cash {
-            let Some(cash_category_id) = Self::cash_category_id(taxonomy_id) else {
+            let Some(default_cash_id) = Self::cash_category_id(taxonomy_id) else {
                 return Vec::new();
+            };
+            let source_ids = if holding.source_account_ids.is_empty() {
+                std::slice::from_ref(&holding.account_id)
+            } else {
+                &holding.source_account_ids
+            };
+            let override_id = if taxonomy_id == "asset_classes" && !cash_overrides.is_empty() {
+                let mut unique_override: Option<&String> = None;
+                let mut all_agree = true;
+                for id in source_ids {
+                    match cash_overrides.get(id) {
+                        Some(ov) => match unique_override {
+                            None => unique_override = Some(ov),
+                            Some(prev) if prev != ov => {
+                                all_agree = false;
+                                break;
+                            }
+                            _ => {}
+                        },
+                        None => {
+                            if unique_override.is_some() {
+                                all_agree = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if all_agree {
+                    unique_override
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let resolved_category_id = if let Some(ov) = override_id {
+                ov.as_str()
+            } else {
+                default_cash_id
             };
             let category_id = if rollup_to_top_level {
                 top_level_map
-                    .get(cash_category_id)
+                    .get(resolved_category_id)
                     .copied()
-                    .unwrap_or(cash_category_id)
+                    .unwrap_or(resolved_category_id)
             } else {
-                cash_category_id
+                resolved_category_id
             };
             return vec![HoldingTaxonomyShare {
                 category_id: category_id.to_string(),
-                assigned_category_id: cash_category_id.to_string(),
+                assigned_category_id: resolved_category_id.to_string(),
                 share: Decimal::ONE,
             }];
         }
@@ -332,6 +417,7 @@ impl AllocationService {
         assignments_by_asset: &HashMap<String, Vec<AssetTaxonomyAssignment>>,
         total_value: Decimal,
         rollup_to_top_level: bool,
+        cash_overrides: &HashMap<String, String>,
     ) -> TaxonomyAllocation {
         // Build category lookup maps
         let category_by_id: HashMap<&str, &Category> =
@@ -362,6 +448,7 @@ impl AllocationService {
                 rollup_to_top_level,
                 &top_level_map,
                 assignments_by_asset,
+                cash_overrides,
             );
 
             for share in shares {
@@ -499,10 +586,13 @@ impl AllocationService {
         &self,
         holdings: &[Holding],
         _base_currency: &str,
+        account_ids: &[String],
     ) -> Result<PortfolioAllocations> {
         if holdings.is_empty() {
             return Ok(PortfolioAllocations::default());
         }
+
+        let cash_overrides = self.load_cash_overrides(account_ids);
 
         // 2. Compute total portfolio value (excluding cash for some allocations)
         let total_value: Decimal = holdings
@@ -545,7 +635,8 @@ impl AllocationService {
                         categories,
                         &assignments_by_asset,
                         total_with_cash,
-                        true, // Roll up to top-level asset classes
+                        true,
+                        &cash_overrides,
                     );
                 }
                 "industries_gics" => {
@@ -557,7 +648,8 @@ impl AllocationService {
                         categories,
                         &assignments_by_asset,
                         total_value,
-                        true, // Roll up to top-level GICS sectors
+                        true,
+                        &cash_overrides,
                     );
                 }
                 "regions" => {
@@ -569,7 +661,8 @@ impl AllocationService {
                         categories,
                         &assignments_by_asset,
                         total_value,
-                        true, // Roll up to top-level regions
+                        true,
+                        &cash_overrides,
                     );
                 }
                 "risk_category" => {
@@ -581,7 +674,8 @@ impl AllocationService {
                         categories,
                         &assignments_by_asset,
                         total_value,
-                        false, // No rollup for risk
+                        false,
+                        &cash_overrides,
                     );
                 }
                 "instrument_type" => {
@@ -593,7 +687,8 @@ impl AllocationService {
                         categories,
                         &assignments_by_asset,
                         total_with_cash,
-                        true, // Roll up to top-level instrument types
+                        true,
+                        &cash_overrides,
                     );
                 }
                 _ if !taxonomy.is_system || taxonomy.id == CUSTOM_GROUPS_TAXONOMY_ID => {
@@ -609,6 +704,7 @@ impl AllocationService {
                         &assignments_by_asset,
                         total_value,
                         false,
+                        &cash_overrides,
                     );
                     // Only include if there are real categories (not just Unknown)
                     if custom_alloc
@@ -639,6 +735,7 @@ impl AllocationService {
         holdings: &[Holding],
         base_currency: &str,
         taxonomy_id: &str,
+        cash_overrides: &HashMap<String, String>,
     ) -> Result<TaxonomyHoldingContributions> {
         let taxonomy_with_cats = self.taxonomy_service.get_taxonomy(taxonomy_id)?;
         let empty_categories: Vec<Category> = Vec::new();
@@ -688,6 +785,7 @@ impl AllocationService {
                 rollup_to_top_level,
                 &top_level_map,
                 &assignments_by_asset,
+                cash_overrides,
             );
             let (asset_id, symbol, name) = Self::holding_display(holding);
             let mut value_by_category: BTreeMap<String, Decimal> = BTreeMap::new();
@@ -747,6 +845,7 @@ impl AllocationService {
         base_currency: &str,
         taxonomy_id: &str,
         category_id: &str,
+        cash_overrides: &HashMap<String, String>,
     ) -> Result<AllocationHoldings> {
         // Get taxonomy with categories for hierarchy lookup and metadata
         let taxonomy_with_cats = self.taxonomy_service.get_taxonomy(taxonomy_id)?;
@@ -807,6 +906,7 @@ impl AllocationService {
                 rollup_to_top_level,
                 &top_level_map,
                 &assignments_by_asset,
+                cash_overrides,
             );
 
             let matched_share: Decimal = shares
@@ -884,7 +984,7 @@ impl AllocationServiceTrait for AllocationService {
             .holdings_service
             .get_holdings(account_id, base_currency)
             .await?;
-        self.compute_allocations_from_holdings(&holdings, base_currency)
+        self.compute_allocations_from_holdings(&holdings, base_currency, &[account_id.to_string()])
             .await
     }
 
@@ -894,11 +994,16 @@ impl AllocationServiceTrait for AllocationService {
         base_currency: &str,
         aggregated_account_id: &str,
     ) -> Result<PortfolioAllocations> {
+        let cash_overrides = self.load_cash_overrides(account_ids);
         let holdings = self
-            .holdings_service
-            .get_holdings_for_accounts(account_ids, base_currency, aggregated_account_id)
+            .get_holdings_for_allocation(
+                account_ids,
+                base_currency,
+                aggregated_account_id,
+                &cash_overrides,
+            )
             .await?;
-        self.compute_allocations_from_holdings(&holdings, base_currency)
+        self.compute_allocations_from_holdings(&holdings, base_currency, account_ids)
             .await
     }
 
@@ -913,11 +1018,13 @@ impl AllocationServiceTrait for AllocationService {
             .holdings_service
             .get_holdings(account_id, base_currency)
             .await?;
+        let overrides = self.load_cash_overrides(&[account_id.to_string()]);
         self.compute_holdings_by_allocation_from_holdings(
             &holdings,
             base_currency,
             taxonomy_id,
             category_id,
+            &overrides,
         )
         .await
     }
@@ -930,15 +1037,21 @@ impl AllocationServiceTrait for AllocationService {
         category_id: &str,
         aggregated_account_id: &str,
     ) -> Result<AllocationHoldings> {
+        let overrides = self.load_cash_overrides(account_ids);
         let holdings = self
-            .holdings_service
-            .get_holdings_for_accounts(account_ids, base_currency, aggregated_account_id)
+            .get_holdings_for_allocation(
+                account_ids,
+                base_currency,
+                aggregated_account_id,
+                &overrides,
+            )
             .await?;
         self.compute_holdings_by_allocation_from_holdings(
             &holdings,
             base_currency,
             taxonomy_id,
             category_id,
+            &overrides,
         )
         .await
     }
@@ -950,14 +1063,20 @@ impl AllocationServiceTrait for AllocationService {
         taxonomy_id: &str,
         aggregated_account_id: &str,
     ) -> Result<TaxonomyHoldingContributions> {
+        let overrides = self.load_cash_overrides(account_ids);
         let holdings = self
-            .holdings_service
-            .get_holdings_for_accounts(account_ids, base_currency, aggregated_account_id)
+            .get_holdings_for_allocation(
+                account_ids,
+                base_currency,
+                aggregated_account_id,
+                &overrides,
+            )
             .await?;
         self.compute_holding_contributions_for_taxonomy_from_holdings(
             &holdings,
             base_currency,
             taxonomy_id,
+            &overrides,
         )
         .await
     }
@@ -1356,6 +1475,7 @@ mod tests {
             &assignments,
             dec!(1000),
             false,
+            &HashMap::new(),
         );
 
         let total_pct: Decimal = result.categories.iter().map(|c| c.percentage).sum();
@@ -1389,6 +1509,7 @@ mod tests {
             &assignments,
             dec!(1000),
             false,
+            &HashMap::new(),
         );
 
         let north_america = result
@@ -1442,6 +1563,7 @@ mod tests {
             &assignments,
             dec!(1000),
             true, // rollup_to_top_level
+            &HashMap::new(),
         );
 
         let americas = result
@@ -1491,11 +1613,18 @@ mod tests {
                 "USD",
                 "regions",
                 "North_America",
+                &HashMap::new(),
             )
             .await
             .unwrap();
         let europe = svc
-            .compute_holdings_by_allocation_from_holdings(&holdings, "USD", "regions", "Europe")
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "regions",
+                "Europe",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
 
@@ -1526,6 +1655,7 @@ mod tests {
                 "USD",
                 "regions",
                 "North_America",
+                &HashMap::new(),
             )
             .await
             .unwrap();
@@ -1535,6 +1665,7 @@ mod tests {
                 "USD",
                 "regions",
                 "__UNKNOWN__",
+                &HashMap::new(),
             )
             .await
             .unwrap();
@@ -1573,11 +1704,18 @@ mod tests {
                 "USD",
                 "regions",
                 "United_States",
+                &HashMap::new(),
             )
             .await
             .unwrap();
         let parent = svc
-            .compute_holdings_by_allocation_from_holdings(&holdings, "USD", "regions", "Americas")
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "regions",
+                "Americas",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
 
@@ -1608,11 +1746,18 @@ mod tests {
                 "USD",
                 "asset_classes",
                 "CASH_BANK_DEPOSITS",
+                &HashMap::new(),
             )
             .await
             .unwrap();
         let parent = svc
-            .compute_holdings_by_allocation_from_holdings(&holdings, "USD", "asset_classes", "CASH")
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "CASH",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
 
@@ -1641,7 +1786,12 @@ mod tests {
         let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
 
         let result = svc
-            .compute_holding_contributions_for_taxonomy_from_holdings(&holdings, "USD", "regions")
+            .compute_holding_contributions_for_taxonomy_from_holdings(
+                &holdings,
+                "USD",
+                "regions",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
 
@@ -1673,7 +1823,12 @@ mod tests {
         let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
 
         let result = svc
-            .compute_holding_contributions_for_taxonomy_from_holdings(&holdings, "USD", "regions")
+            .compute_holding_contributions_for_taxonomy_from_holdings(
+                &holdings,
+                "USD",
+                "regions",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
         let ids: Vec<_> = result
@@ -1707,7 +1862,12 @@ mod tests {
         let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
 
         let result = svc
-            .compute_holding_contributions_for_taxonomy_from_holdings(&holdings, "USD", "regions")
+            .compute_holding_contributions_for_taxonomy_from_holdings(
+                &holdings,
+                "USD",
+                "regions",
+                &HashMap::new(),
+            )
             .await
             .unwrap();
         let americas = result
@@ -1746,6 +1906,7 @@ mod tests {
                 &holdings,
                 "USD",
                 "asset_classes",
+                &HashMap::new(),
             )
             .await
             .unwrap();
@@ -1775,6 +1936,7 @@ mod tests {
             &HashMap::new(),
             dec!(12000),
             true,
+            &HashMap::new(),
         );
 
         let cash = result
@@ -1804,6 +1966,7 @@ mod tests {
             &HashMap::new(),
             dec!(12000),
             true,
+            &HashMap::new(),
         );
 
         let cash_fx = result
@@ -1840,7 +2003,7 @@ mod tests {
         let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
 
         let result = svc
-            .compute_allocations_from_holdings(&holdings, "USD")
+            .compute_allocations_from_holdings(&holdings, "USD", &[])
             .await
             .unwrap();
 
@@ -1857,5 +2020,230 @@ mod tests {
 
         assert_eq!(small_cap.value, dec!(1000));
         assert_eq!(small_cap.percentage, dec!(100));
+    }
+
+    // ── Cash allocation override tests ─────────────────────────────────────
+
+    fn make_cash_holding_for_account(
+        currency: &str,
+        base_value: Decimal,
+        account_id: &str,
+    ) -> Holding {
+        Holding {
+            account_id: account_id.to_string(),
+            ..make_cash_holding(currency, base_value)
+        }
+    }
+
+    fn make_merged_cash_holding(
+        currency: &str,
+        base_value: Decimal,
+        source_account_ids: Vec<&str>,
+    ) -> Holding {
+        Holding {
+            id: format!("AGG-CASH-{currency}"),
+            account_id: "aggregated".to_string(),
+            source_account_ids: source_account_ids.into_iter().map(String::from).collect(),
+            ..make_cash_holding(currency, base_value)
+        }
+    }
+
+    #[test]
+    fn cash_override_maps_to_fixed_income_in_asset_classes() {
+        let svc = svc();
+        let holdings = vec![
+            make_holding("AAPL", dec!(5000)),
+            make_cash_holding_for_account("USD", dec!(5000), "savings"),
+        ];
+        let categories = vec![
+            make_category("EQUITY", None),
+            make_category("FIXED_INCOME", None),
+            make_category("CASH", None),
+            make_category("CASH_BANK_DEPOSITS", Some("CASH")),
+        ];
+        let overrides = HashMap::from([("savings".to_string(), "FIXED_INCOME".to_string())]);
+
+        let result = svc.aggregate_by_taxonomy(
+            &holdings,
+            "asset_classes",
+            "Asset Classes",
+            "#ccc",
+            &categories,
+            &HashMap::from([(
+                "AAPL".to_string(),
+                vec![make_assignment("AAPL", "asset_classes", "EQUITY", 10000)],
+            )]),
+            dec!(10000),
+            true,
+            &overrides,
+        );
+
+        let fi = result
+            .categories
+            .iter()
+            .find(|c| c.category_id == "FIXED_INCOME");
+        assert!(fi.is_some(), "FIXED_INCOME category should exist");
+        assert_eq!(fi.unwrap().value, dec!(5000));
+
+        let cash = result.categories.iter().find(|c| c.category_id == "CASH");
+        assert!(
+            cash.is_none(),
+            "CASH category should not exist when all cash is overridden"
+        );
+    }
+
+    #[test]
+    fn cash_override_does_not_affect_instrument_type() {
+        let svc = svc();
+        let holdings = vec![make_cash_holding_for_account("USD", dec!(5000), "savings")];
+        let categories = vec![
+            make_category("CASH_FX", None),
+            make_category("CASH", Some("CASH_FX")),
+        ];
+        let overrides = HashMap::from([("savings".to_string(), "FIXED_INCOME".to_string())]);
+
+        let result = svc.aggregate_by_taxonomy(
+            &holdings,
+            "instrument_type",
+            "Instrument Type",
+            "#ccc",
+            &categories,
+            &HashMap::new(),
+            dec!(5000),
+            true,
+            &overrides,
+        );
+
+        let cash_fx = result
+            .categories
+            .iter()
+            .find(|c| c.category_id == "CASH_FX");
+        assert!(
+            cash_fx.is_some(),
+            "instrument_type should still show CASH_FX"
+        );
+        assert_eq!(cash_fx.unwrap().value, dec!(5000));
+
+        let fi = result
+            .categories
+            .iter()
+            .find(|c| c.category_id == "FIXED_INCOME");
+        assert!(
+            fi.is_none(),
+            "FIXED_INCOME should not appear in instrument_type"
+        );
+    }
+
+    #[test]
+    fn default_cash_behavior_unchanged_without_override() {
+        let svc = svc();
+        let holdings = vec![
+            make_holding("AAPL", dec!(8000)),
+            make_cash_holding("USD", dec!(2000)),
+        ];
+        let categories = vec![
+            make_category("EQUITY", None),
+            make_category("CASH", None),
+            make_category("CASH_BANK_DEPOSITS", Some("CASH")),
+        ];
+
+        let result = svc.aggregate_by_taxonomy(
+            &holdings,
+            "asset_classes",
+            "Asset Classes",
+            "#ccc",
+            &categories,
+            &HashMap::from([(
+                "AAPL".to_string(),
+                vec![make_assignment("AAPL", "asset_classes", "EQUITY", 10000)],
+            )]),
+            dec!(10000),
+            true,
+            &HashMap::new(),
+        );
+
+        let cash = result.categories.iter().find(|c| c.category_id == "CASH");
+        assert!(cash.is_some(), "CASH should exist with default behavior");
+        assert_eq!(cash.unwrap().value, dec!(2000));
+    }
+
+    #[test]
+    fn mixed_source_accounts_fall_back_to_default() {
+        let svc = svc();
+        let holdings = vec![make_merged_cash_holding(
+            "USD",
+            dec!(10000),
+            vec!["savings", "checking"],
+        )];
+        let categories = vec![
+            make_category("FIXED_INCOME", None),
+            make_category("CASH", None),
+            make_category("CASH_BANK_DEPOSITS", Some("CASH")),
+        ];
+        // savings has override, checking does not → mixed → should fall back to CASH
+        let overrides = HashMap::from([("savings".to_string(), "FIXED_INCOME".to_string())]);
+
+        let result = svc.aggregate_by_taxonomy(
+            &holdings,
+            "asset_classes",
+            "Asset Classes",
+            "#ccc",
+            &categories,
+            &HashMap::new(),
+            dec!(10000),
+            true,
+            &overrides,
+        );
+
+        let cash = result.categories.iter().find(|c| c.category_id == "CASH");
+        assert!(cash.is_some(), "mixed sources should fall back to CASH");
+        assert_eq!(cash.unwrap().value, dec!(10000));
+
+        let fi = result
+            .categories
+            .iter()
+            .find(|c| c.category_id == "FIXED_INCOME");
+        assert!(
+            fi.is_none(),
+            "FIXED_INCOME should not appear with mixed sources"
+        );
+    }
+
+    #[test]
+    fn all_sources_same_override_applies() {
+        let svc = svc();
+        let holdings = vec![make_merged_cash_holding(
+            "USD",
+            dec!(10000),
+            vec!["sav1", "sav2"],
+        )];
+        let categories = vec![
+            make_category("FIXED_INCOME", None),
+            make_category("CASH", None),
+            make_category("CASH_BANK_DEPOSITS", Some("CASH")),
+        ];
+        let overrides = HashMap::from([
+            ("sav1".to_string(), "FIXED_INCOME".to_string()),
+            ("sav2".to_string(), "FIXED_INCOME".to_string()),
+        ]);
+
+        let result = svc.aggregate_by_taxonomy(
+            &holdings,
+            "asset_classes",
+            "Asset Classes",
+            "#ccc",
+            &categories,
+            &HashMap::new(),
+            dec!(10000),
+            true,
+            &overrides,
+        );
+
+        let fi = result
+            .categories
+            .iter()
+            .find(|c| c.category_id == "FIXED_INCOME");
+        assert!(fi.is_some(), "all sources agree → FIXED_INCOME");
+        assert_eq!(fi.unwrap().value, dec!(10000));
     }
 }
