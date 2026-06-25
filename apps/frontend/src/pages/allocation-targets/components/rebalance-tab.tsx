@@ -18,6 +18,7 @@ import {
 } from "./allocation-target-colors";
 import { accountScopeKey } from "./target-scope";
 import { useRebalancePlan } from "../hooks/use-rebalance";
+import { useSellConstraints } from "../hooks/use-sell-constraints";
 
 // Drift direction colors — clay for overweight (+), slate-blue for underweight (−).
 const DRIFT_OVER = "#b4664a";
@@ -1051,7 +1052,17 @@ function TradeActionBadge({ action }: { action: string }) {
   );
 }
 
-function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; currency: string }) {
+function TradesTable({
+  trades,
+  currency,
+  onToggleDoNotSell,
+  isDoNotSell,
+}: {
+  trades: SuggestedManualTrade[];
+  currency: string;
+  onToggleDoNotSell?: (assetId: string) => void;
+  isDoNotSell?: (assetId: string) => boolean;
+}) {
   const buys = trades.filter((t) => t.action === "buy");
   const sells = trades.filter((t) => t.action === "sell");
   const buyTotal = buys.reduce((s, t) => s + t.estimatedAmount, 0);
@@ -1065,6 +1076,20 @@ function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; cur
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <TradeActionBadge action={t.action} />
+                  {t.action === "sell" && t.assetId && onToggleDoNotSell && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleDoNotSell(t.assetId!)}
+                      className={cn(
+                        "rounded p-0.5",
+                        isDoNotSell?.(t.assetId!)
+                          ? "text-amber-600 dark:text-amber-400"
+                          : "text-muted-foreground/40",
+                      )}
+                    >
+                      <Icons.Lock className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <span className="text-foreground truncate font-mono text-sm font-semibold">
                     {t.symbol ?? "Trade"}
                   </span>
@@ -1137,7 +1162,32 @@ function TradesTable({ trades, currency }: { trades: SuggestedManualTrade[]; cur
             {trades.map((t, i) => (
               <tr key={i} className="border-border hover:bg-muted/30 h-12 border-b last:border-b-0">
                 <td className="pl-5 pr-2">
-                  <TradeActionBadge action={t.action} />
+                  <div className="flex items-center gap-1.5">
+                    <TradeActionBadge action={t.action} />
+                    {t.action === "sell" && t.assetId && onToggleDoNotSell && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => onToggleDoNotSell(t.assetId!)}
+                            className={cn(
+                              "rounded p-0.5 transition-colors",
+                              isDoNotSell?.(t.assetId!)
+                                ? "text-amber-600 dark:text-amber-400"
+                                : "text-muted-foreground/40 hover:text-muted-foreground",
+                            )}
+                          >
+                            <Icons.Lock className="h-3.5 w-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent className="text-xs">
+                          {isDoNotSell?.(t.assetId!)
+                            ? "Remove do-not-sell constraint"
+                            : "Mark as do-not-sell (excluded from future plans)"}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
                 </td>
                 <td className="pr-3">
                   {t.symbol ? (
@@ -1212,6 +1262,7 @@ export function RebalanceTab({
   const [cashDraft, setCashDraft] = useState<{ key: string; value: string } | null>(null);
   const [scenarioMode, setScenarioMode] = useState<ScenarioMode>("cash_flow_only");
   const tradesRef = useRef<HTMLDivElement>(null);
+  const sellConstraints = useSellConstraints(profile?.id);
 
   const currency = driftReport?.baseCurrency ?? "USD";
   const inputContextKey = `${profile?.id ?? "no-profile"}:${accountScopeKey(accountScope)}:${currency}`;
@@ -1230,8 +1281,8 @@ export function RebalanceTab({
     filter: accountScope,
     scenarioMode,
     sourceKey,
-    doNotSellAssetIds: [],
-    avoidSellingAccountIds: [],
+    doNotSellAssetIds: sellConstraints.doNotSellAssetIds,
+    avoidSellingAccountIds: sellConstraints.avoidSellingAccountIds,
   });
   const cachedPlan = planQuery.data ?? null;
   const hasStalePlan = !!cachedPlan && cachedPlan.sourceKey !== sourceKey;
@@ -1309,6 +1360,31 @@ export function RebalanceTab({
         value={scenarioMode}
         onChange={setScenarioMode}
       />
+
+      {isSellMode && sellConstraints.constraints.length > 0 && (
+        <div className="border-border bg-muted/30 flex flex-wrap items-center gap-2 rounded-lg border px-4 py-2.5">
+          <Icons.Lock className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+          <span className="text-muted-foreground font-mono text-xs">Sell constraints:</span>
+          {sellConstraints.constraints.map((c) => (
+            <span
+              key={c.id}
+              className="border-border bg-background inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs"
+            >
+              <span className="text-muted-foreground">
+                {c.entityType === "asset" ? "Asset" : "Account"}:
+              </span>
+              <span className="text-foreground font-medium">{c.entityId}</span>
+              <button
+                type="button"
+                onClick={() => sellConstraints.toggleConstraint(c.entityType, c.entityId)}
+                className="text-muted-foreground hover:text-foreground ml-0.5"
+              >
+                <Icons.X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* ── Rebalance planner ── */}
       <Card>
@@ -1390,7 +1466,14 @@ export function RebalanceTab({
               </div>
               {plan.trades.length > 0 ? (
                 <div className="pb-1 pt-2">
-                  <TradesTable trades={plan.trades} currency={currency} />
+                  <TradesTable
+                    trades={plan.trades}
+                    currency={currency}
+                    onToggleDoNotSell={(assetId) =>
+                      sellConstraints.toggleConstraint("asset", assetId)
+                    }
+                    isDoNotSell={(assetId) => sellConstraints.hasConstraint("asset", assetId)}
+                  />
                 </div>
               ) : (
                 <p className="text-muted-foreground px-6 py-4 font-mono text-xs">

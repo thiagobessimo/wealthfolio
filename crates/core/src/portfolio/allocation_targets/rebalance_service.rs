@@ -314,7 +314,7 @@ impl RebalanceService {
 impl RebalanceServiceTrait for RebalanceService {
     async fn calculate_plan(
         &self,
-        input: CalculateRebalancePlanInput,
+        mut input: CalculateRebalancePlanInput,
     ) -> CoreResult<RebalancePlan> {
         debug!("Calculating rebalance plan for target {}", input.target_id);
 
@@ -376,6 +376,26 @@ impl RebalanceServiceTrait for RebalanceService {
         } else {
             input.available_cash
         };
+
+        // Merge persisted sell constraints with per-calculation ones.
+        let persisted = self
+            .allocation_target_service
+            .list_sell_constraints(&input.target_id)
+            .unwrap_or_default();
+        for c in &persisted {
+            match c.entity_type {
+                super::model::SellConstraintEntityType::Asset => {
+                    if !input.do_not_sell_asset_ids.contains(&c.entity_id) {
+                        input.do_not_sell_asset_ids.push(c.entity_id.clone());
+                    }
+                }
+                super::model::SellConstraintEntityType::Account => {
+                    if !input.avoid_selling_account_ids.contains(&c.entity_id) {
+                        input.avoid_selling_account_ids.push(c.entity_id.clone());
+                    }
+                }
+            }
+        }
 
         // Drift report — provides total_value and per-category target/current data.
         let drift = self
