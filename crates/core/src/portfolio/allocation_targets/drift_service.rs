@@ -402,7 +402,7 @@ impl DriftService {
             .iter()
             .filter(|c| {
                 c.holding_type == HoldingType::Cash
-                    && default_cash_cat.map_or(true, |cat| c.category_id == cat)
+                    && default_cash_cat.is_none_or(|cat| c.category_id == cat)
             })
             .map(|c| c.value)
             .sum();
