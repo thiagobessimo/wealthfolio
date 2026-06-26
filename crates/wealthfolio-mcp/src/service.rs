@@ -11,7 +11,8 @@ use crate::handler::WealthfolioMcpHandler;
 
 /// Builds the Wealthfolio MCP Streamable HTTP service.
 ///
-/// Defaults: the v1 read-only catalog, no audit sink, no instructions.
+/// Defaults: the full MCP catalog (read + draft/suggest + commit tools,
+/// scope-filtered per token at the boundary), no audit sink, no instructions.
 /// Hosts must serve the result behind authentication middleware that
 /// injects [`crate::auth::McpAuthContext`] — the handler fails closed
 /// otherwise.
@@ -32,7 +33,7 @@ impl McpServerBuilder {
         }
     }
 
-    /// Override the tool set (default: the v1 read-only catalog).
+    /// Override the tool set (default: the full MCP catalog).
     pub fn tools(mut self, tools: Vec<Arc<dyn AgentTool>>) -> Self {
         self.tools = Some(tools);
         self
@@ -52,7 +53,7 @@ impl McpServerBuilder {
     pub fn build_handler(self) -> WealthfolioMcpHandler {
         let catalog = match self.tools {
             Some(tools) => AgentToolCatalog::new(tools),
-            None => AgentToolCatalog::v1_read_tools(),
+            None => AgentToolCatalog::mcp_catalog(),
         };
         WealthfolioMcpHandler::new(self.env, Arc::new(catalog), self.audit, self.instructions)
     }

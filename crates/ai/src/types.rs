@@ -45,6 +45,9 @@ pub const DEFAULT_TOOLS_ALLOWLIST: &[&str] = &[
     "list_asset_taxonomies",
     "get_asset_taxonomy_assignments",
     "prepare_asset_classification",
+    "get_portfolios",
+    "get_net_worth",
+    "get_contribution_limits",
 ];
 
 const LEGACY_VISIBLE_DATA_TOOLS: &[&str] = &[

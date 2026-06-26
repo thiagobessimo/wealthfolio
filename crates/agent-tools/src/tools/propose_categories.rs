@@ -17,18 +17,18 @@
 //! Same pattern as `import_csv`: the agent's tool-call IS the structured output.
 //!
 //! The deterministic pass (`compute_categorization_state`) and the shared
-//! DTOs live in `wealthfolio_agent_tools::tools::categorization_context`,
-//! shared with the migrated `list_categorization_context` read tool.
+//! DTOs live in [`crate::tools::categorization_context`], shared with the
+//! migrated `list_categorization_context` read tool.
 
 use log::{debug, warn};
-use rig::{completion::ToolDefinition, tool::Tool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::env::AiEnvironment;
-use crate::error::AiError;
-use wealthfolio_agent_tools::tools::categorization_context::{
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
+use crate::tools::categorization_context::{
     compute_categorization_state, CategorizationFilters, CategoryExample, Proposal,
     TaxonomySummary, UnproposedActivity, MAX_LIMIT,
 };
@@ -109,99 +109,31 @@ fn default_draft_status() -> String {
     "draft".to_string()
 }
 
-pub struct ProposeCategoriesTool<E: AiEnvironment> {
-    env: Arc<E>,
-}
+const PROPOSE_CATEGORIES_DESCRIPTION: &str =
+    "Render the categorization widget for the user to review and confirm. Run \
+     `list_categorization_context` FIRST to see the taxonomies, recent few-shot \
+     examples, and the unproposed rows. If `needsAiJudgement` is 0 and total is > 0, \
+     still call this tool with `aiProposals: []` so the rule/history draft proposals \
+     appear in the review widget. Otherwise reason about each unproposed row, then \
+     call this tool with `aiProposals` filled in. The tool runs deterministic rule + \
+     same-payee history matches, merges your `aiProposals` for the rows those passes \
+     didn't cover, and renders the widget. Do NOT pass `accountIds` for generic \
+     mentions like 'credit card' or 'this account'.";
 
-impl<E: AiEnvironment> ProposeCategoriesTool<E> {
-    pub fn new(env: Arc<E>) -> Self {
-        Self { env }
-    }
-}
+pub struct ProposeCategories;
 
-impl<E: AiEnvironment> Clone for ProposeCategoriesTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-        }
-    }
-}
-
-impl<E: AiEnvironment + 'static> Tool for ProposeCategoriesTool<E> {
-    const NAME: &'static str = "propose_transaction_categories";
-
-    type Error = AiError;
-    type Args = ProposeCategoriesArgs;
-    type Output = ProposeCategoriesOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description:
-                "Render the categorization widget for the user to review and confirm. Run \
-                 `list_categorization_context` FIRST to see the taxonomies, recent few-shot \
-                 examples, and the unproposed rows. If `needsAiJudgement` is 0 and total is > 0, \
-                 still call this tool with `aiProposals: []` so the rule/history draft proposals \
-                 appear in the review widget. Otherwise reason about each unproposed row, then \
-                 call this tool with `aiProposals` filled in. The tool runs deterministic rule + \
-                 same-payee history matches, merges your `aiProposals` for the rows those passes \
-                 didn't cover, and renders the widget. Do NOT pass `accountIds` for generic \
-                 mentions like 'credit card' or 'this account'."
-                    .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "activityIds": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional explicit set of activity IDs to propose for. Intersected with the other filters."
-                    },
-                    "accountIds": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "OMIT unless the user names a specific account by exact name or ID."
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["uncategorized", "all", "needs_review"],
-                        "description": "Default: uncategorized."
-                    },
-                    "startDate": { "type": "string", "description": "Inclusive ISO 8601 lower bound." },
-                    "endDate":   { "type": "string", "description": "Inclusive ISO 8601 upper bound." },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_LIMIT,
-                        "description": "Max rows to propose. Default 100 (also the cap). When the returned `summary.total` equals the limit, more uncategorized rows likely remain — see system prompt for the continuation flow."
-                    },
-                    "aiProposals": {
-                        "type": "array",
-                        "description": "Your inferred categories for the rows returned as `unproposed` from `list_categorization_context`. Pass [] only when that context result returned needsAiJudgement = 0. Each entry: { activityId, taxonomyId, categoryKey, confidence (0–1), reason }.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "activityId": { "type": "string" },
-                                "taxonomyId": { "type": "string" },
-                                "categoryKey": { "type": "string" },
-                                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                                "reason": { "type": "string" }
-                            },
-                            "required": ["activityId", "taxonomyId", "categoryKey"]
-                        }
-                    }
-                }
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+impl ProposeCategories {
+    pub(crate) async fn build_output(
+        env: &dyn AgentEnvironment,
+        args: ProposeCategoriesArgs,
+    ) -> Result<ProposeCategoriesOutput, AgentToolError> {
         debug!(
             "propose_transaction_categories called (ai_proposals: {})",
             args.ai_proposals.as_ref().map(|v| v.len()).unwrap_or(0)
         );
 
         let mut state = compute_categorization_state(
-            self.env.as_ref(),
+            env,
             CategorizationFilters {
                 activity_ids: args.activity_ids.clone(),
                 account_ids: args.account_ids.clone(),
@@ -286,6 +218,83 @@ impl<E: AiEnvironment + 'static> Tool for ProposeCategoriesTool<E> {
     }
 }
 
+#[async_trait::async_trait]
+impl AgentTool for ProposeCategories {
+    fn name(&self) -> &'static str {
+        "propose_transaction_categories"
+    }
+
+    fn description(&self) -> &'static str {
+        PROPOSE_CATEGORIES_DESCRIPTION
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "activityIds": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional explicit set of activity IDs to propose for. Intersected with the other filters."
+                },
+                "accountIds": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "OMIT unless the user names a specific account by exact name or ID."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["uncategorized", "all", "needs_review"],
+                    "description": "Default: uncategorized."
+                },
+                "startDate": { "type": "string", "description": "Inclusive ISO 8601 lower bound." },
+                "endDate":   { "type": "string", "description": "Inclusive ISO 8601 upper bound." },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_LIMIT,
+                    "description": "Max rows to propose. Default 100 (also the cap). When the returned `summary.total` equals the limit, more uncategorized rows likely remain — see system prompt for the continuation flow."
+                },
+                "aiProposals": {
+                    "type": "array",
+                    "description": "Your inferred categories for the rows returned as `unproposed` from `list_categorization_context`. Pass [] only when that context result returned needsAiJudgement = 0. Each entry: { activityId, taxonomyId, categoryKey, confidence (0–1), reason }.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "activityId": { "type": "string" },
+                            "taxonomyId": { "type": "string" },
+                            "categoryKey": { "type": "string" },
+                            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                            "reason": { "type": "string" }
+                        },
+                        "required": ["activityId", "taxonomyId", "categoryKey"]
+                    }
+                }
+            }
+        })
+    }
+
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::ClassificationSuggest]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Suggest
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
+        let args: ProposeCategoriesArgs = serde_json::from_value(args)?;
+        let output = ProposeCategories::build_output(env.as_ref(), args).await?;
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
+        })
+    }
+}
+
 /// Merge agent-supplied AI proposals into the deterministic results.
 /// Drops entries whose `activity_id` is not in `unproposed` (rules/history
 /// already covered them) or whose `category_key` is not in `key_lookup`.
@@ -342,341 +351,7 @@ pub(crate) fn merge_ai_proposals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, NaiveDateTime, Utc};
-    use rust_decimal::Decimal;
-    use wealthfolio_agent_tools::tools::categorization_context::{
-        build_category_path, normalize_payee, retain_explicit_targets, truncate_notes,
-        validate_explicit_activity_ids, MAX_NOTES_LEN,
-    };
-    use wealthfolio_agent_tools::AgentToolError;
-    use wealthfolio_core::activities::{Activity, ActivityStatus};
-    use wealthfolio_core::taxonomies::Category;
-    use wealthfolio_spending::cash_activities::model::CashFlowBucket;
-    use wealthfolio_spending::cash_activities::{CashActivity, CashActivityStatusFilter};
-
-    // ----- normalize_payee -------------------------------------------------
-
-    #[test]
-    fn normalize_payee_table_driven() {
-        let cases: &[(&str, &str)] = &[
-            ("SQ *MORNING OWL TORONTO #5523", "sq *morning owl"),
-            ("AMAZON.COM*A1B2", "amazon.com*a1b2"),
-            ("COBS BREAD", "cobs bread"),
-            ("", ""),
-            ("   \t  ", ""),
-        ];
-        for (input, expected) in cases {
-            assert_eq!(
-                normalize_payee(input),
-                *expected,
-                "normalize_payee({:?})",
-                input
-            );
-        }
-    }
-
-    // ----- truncate_notes --------------------------------------------------
-
-    #[test]
-    fn truncate_notes_short_unchanged() {
-        let s = "hello world";
-        assert_eq!(truncate_notes(s), s);
-    }
-
-    #[test]
-    fn truncate_notes_exactly_max_unchanged() {
-        let s: String = "a".repeat(MAX_NOTES_LEN);
-        assert_eq!(truncate_notes(&s), s);
-    }
-
-    #[test]
-    fn truncate_notes_long_gets_ellipsis() {
-        let s: String = "a".repeat(MAX_NOTES_LEN + 50);
-        let out = truncate_notes(&s);
-        assert!(out.ends_with('…'));
-        // First MAX_NOTES_LEN chars + ellipsis.
-        assert_eq!(out.chars().count(), MAX_NOTES_LEN + 1);
-    }
-
-    #[test]
-    fn truncate_notes_multibyte_truncates_by_char_not_byte() {
-        // Each emoji is multi-byte UTF-8 (4 bytes). MAX_NOTES_LEN+10 emojis
-        // exceed MAX_NOTES_LEN by char count and would be far over by byte count.
-        let s: String = "🍕".repeat(MAX_NOTES_LEN + 10);
-        let out = truncate_notes(&s);
-        assert!(out.ends_with('…'));
-        // Should have exactly MAX_NOTES_LEN pizza chars + 1 ellipsis.
-        assert_eq!(out.chars().count(), MAX_NOTES_LEN + 1);
-        // And every leading char should be the pizza emoji.
-        let pizzas = out
-            .chars()
-            .take(MAX_NOTES_LEN)
-            .filter(|c| *c == '🍕')
-            .count();
-        assert_eq!(pizzas, MAX_NOTES_LEN);
-    }
-
-    #[test]
-    fn truncate_notes_multibyte_under_byte_limit_unchanged() {
-        // 30 pizzas = 120 bytes, but only 30 chars — ≤ MAX_NOTES_LEN by char,
-        // so should be unchanged. (Also confirms `s.len() <= MAX_NOTES_LEN`
-        // byte-based fast path works correctly when bytes ≤ MAX_NOTES_LEN.)
-        let s: String = "a".repeat(50);
-        assert_eq!(truncate_notes(&s), s);
-    }
-
-    // ----- build_category_path --------------------------------------------
-
-    fn make_cat(id: &str, name: &str, parent: Option<&str>) -> Category {
-        let now: NaiveDateTime = "2024-01-01T00:00:00"
-            .parse()
-            .expect("valid timestamp literal");
-        Category {
-            id: id.to_string(),
-            taxonomy_id: "tax1".to_string(),
-            parent_id: parent.map(str::to_string),
-            name: name.to_string(),
-            key: id.to_string(),
-            color: "#000000".to_string(),
-            description: None,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-            icon: None,
-        }
-    }
-
-    fn make_cash_activity(
-        id: &str,
-        account_id: &str,
-        activity_date: &str,
-        needs_review: bool,
-        assigned: bool,
-    ) -> CashActivity {
-        let now = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let activity_date = DateTime::parse_from_rfc3339(activity_date)
-            .unwrap()
-            .with_timezone(&Utc);
-        let assignments = if assigned {
-            vec![
-                wealthfolio_spending::activity_assignments::ActivityTaxonomyAssignment {
-                    id: format!("{id}-asg"),
-                    activity_id: id.to_string(),
-                    taxonomy_id: "spending_categories".to_string(),
-                    category_id: "cat-1".to_string(),
-                    weight: 10_000,
-                    source: "manual".to_string(),
-                    created_at: now.naive_utc(),
-                    updated_at: now.naive_utc(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        CashActivity {
-            activity: Activity {
-                id: id.to_string(),
-                account_id: account_id.to_string(),
-                asset_id: None,
-                activity_type: "WITHDRAWAL".to_string(),
-                activity_type_override: None,
-                source_type: None,
-                subtype: None,
-                status: ActivityStatus::Posted,
-                activity_date,
-                settlement_date: None,
-                quantity: None,
-                unit_price: None,
-                amount: Some(Decimal::new(1000, 2)),
-                fee: None,
-                currency: "USD".to_string(),
-                fx_rate: None,
-                notes: Some("test".to_string()),
-                metadata: None,
-                source_system: None,
-                source_record_id: None,
-                source_group_id: None,
-                idempotency_key: None,
-                import_run_id: None,
-                is_user_modified: false,
-                needs_review,
-                created_at: now,
-                updated_at: now,
-            },
-            cash_flow_bucket: CashFlowBucket::Spending,
-            assignments,
-            event_id: None,
-            transfer_link_status: None,
-        }
-    }
-
-    #[test]
-    fn explicit_activity_ids_reject_over_max_limit() {
-        let ids = (0..150)
-            .map(|i| format!("activity-{i}"))
-            .collect::<Vec<_>>();
-
-        let err = validate_explicit_activity_ids(&ids).unwrap_err();
-
-        assert!(matches!(err, AgentToolError::InvalidInput(_)));
-    }
-
-    #[test]
-    fn explicit_activity_ids_accept_max_limit() {
-        let ids = (0..MAX_LIMIT)
-            .map(|i| format!("activity-{i}"))
-            .collect::<Vec<_>>();
-
-        validate_explicit_activity_ids(&ids).unwrap();
-    }
-
-    #[test]
-    fn explicit_targets_intersect_account_status_and_date_filters() {
-        let mut targets = vec![
-            make_cash_activity("keep", "acct-1", "2024-06-15T00:00:00Z", true, false),
-            make_cash_activity(
-                "wrong-account",
-                "acct-2",
-                "2024-06-15T00:00:00Z",
-                true,
-                false,
-            ),
-            make_cash_activity(
-                "wrong-status",
-                "acct-1",
-                "2024-06-15T00:00:00Z",
-                false,
-                false,
-            ),
-            make_cash_activity("too-early", "acct-1", "2024-05-31T23:59:59Z", true, false),
-            make_cash_activity("too-late", "acct-1", "2024-07-01T00:00:01Z", true, false),
-        ];
-        let filters = CategorizationFilters {
-            account_ids: Some(vec!["acct-1".to_string()]),
-            start_date: Some("2024-06-01T00:00:00Z".to_string()),
-            end_date: Some("2024-07-01T00:00:00Z".to_string()),
-            ..Default::default()
-        };
-
-        retain_explicit_targets(
-            &mut targets,
-            &filters,
-            CashActivityStatusFilter::NeedsReview,
-            &HashMap::new(),
-        )
-        .unwrap();
-
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].activity.id, "keep");
-    }
-
-    #[test]
-    fn explicit_targets_apply_categorized_status_filter() {
-        let mut targets = vec![
-            make_cash_activity("assigned", "acct-1", "2024-06-15T00:00:00Z", false, true),
-            make_cash_activity("unassigned", "acct-1", "2024-06-15T00:00:00Z", false, false),
-        ];
-
-        retain_explicit_targets(
-            &mut targets,
-            &CategorizationFilters::default(),
-            CashActivityStatusFilter::Categorized,
-            &HashMap::new(),
-        )
-        .unwrap();
-
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].activity.id, "assigned");
-    }
-
-    #[test]
-    fn explicit_targets_treat_credit_card_payments_as_categorized() {
-        let mut payment =
-            make_cash_activity("payment", "card-1", "2024-06-15T00:00:00Z", false, false);
-        payment.activity.activity_type = "TRANSFER_IN".to_string();
-        payment.activity.source_group_id = Some("payment-group".to_string());
-        let mut targets = vec![payment];
-        let account_type_by_id = HashMap::from([(
-            "card-1".to_string(),
-            wealthfolio_core::accounts::account_types::CREDIT_CARD.to_string(),
-        )]);
-
-        retain_explicit_targets(
-            &mut targets,
-            &CategorizationFilters::default(),
-            CashActivityStatusFilter::Uncategorized,
-            &account_type_by_id,
-        )
-        .unwrap();
-
-        assert!(targets.is_empty());
-    }
-
-    #[test]
-    fn explicit_targets_do_not_treat_unlinked_credit_card_transfer_as_categorized() {
-        let mut payment =
-            make_cash_activity("payment", "card-1", "2024-06-15T00:00:00Z", false, false);
-        payment.activity.activity_type = "TRANSFER_IN".to_string();
-        let mut targets = vec![payment];
-        let account_type_by_id = HashMap::from([(
-            "card-1".to_string(),
-            wealthfolio_core::accounts::account_types::CREDIT_CARD.to_string(),
-        )]);
-
-        retain_explicit_targets(
-            &mut targets,
-            &CategorizationFilters::default(),
-            CashActivityStatusFilter::Uncategorized,
-            &account_type_by_id,
-        )
-        .unwrap();
-
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].activity.id, "payment");
-    }
-
-    #[test]
-    fn build_category_path_root() {
-        let cat = make_cat("root", "Food", None);
-        let map: HashMap<&str, &Category> = HashMap::new();
-        assert_eq!(build_category_path(&cat, &map), "Food");
-    }
-
-    #[test]
-    fn build_category_path_one_level() {
-        let parent = make_cat("p", "Parent", None);
-        let child = make_cat("c", "Child", Some("p"));
-        let map: HashMap<&str, &Category> = [("p", &parent)].into_iter().collect();
-        assert_eq!(build_category_path(&child, &map), "Parent / Child");
-    }
-
-    #[test]
-    fn build_category_path_two_levels() {
-        let gp = make_cat("gp", "Grandparent", None);
-        let p = make_cat("p", "Parent", Some("gp"));
-        let c = make_cat("c", "Child", Some("p"));
-        let map: HashMap<&str, &Category> = [("gp", &gp), ("p", &p)].into_iter().collect();
-        assert_eq!(
-            build_category_path(&c, &map),
-            "Grandparent / Parent / Child"
-        );
-    }
-
-    #[test]
-    fn build_category_path_cycle_does_not_loop() {
-        // Self-cycle: cat A's parent is A.
-        let a = make_cat("a", "A", Some("a"));
-        let map: HashMap<&str, &Category> = [("a", &a)].into_iter().collect();
-        // If this returns, we passed (no infinite loop). Depth cap is >8.
-        let path = build_category_path(&a, &map);
-        // We expect 1 (self) + up to 9 cycle traversals before break.
-        assert!(path.contains("A"));
-        // Total segments capped: starting name + at most 9 parent walks.
-        let segments: Vec<&str> = path.split(" / ").collect();
-        assert!(segments.len() <= 10, "got {} segments", segments.len());
-    }
+    use crate::tools::categorization_context::UnproposedActivity;
 
     // ----- merge_ai_proposals ----------------------------------------------
 

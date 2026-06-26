@@ -26,6 +26,24 @@ impl AgentToolCatalog {
         Self::new(crate::tools::v1_read_tools())
     }
 
+    /// The in-app assistant catalog: read tools plus the draft/suggest tools.
+    /// Commit tools are NOT included — the assistant persists drafts through
+    /// its confirmation widget, never directly.
+    pub fn assistant_catalog() -> Self {
+        let mut tools = crate::tools::v1_read_tools();
+        tools.extend(crate::tools::draft_suggest_tools());
+        Self::new(tools)
+    }
+
+    /// The MCP catalog: read + draft/suggest + commit tools. Scope filtering at
+    /// the boundary (`execute`, `list_tools`) hides whatever a token can't reach.
+    pub fn mcp_catalog() -> Self {
+        let mut tools = crate::tools::v1_read_tools();
+        tools.extend(crate::tools::draft_suggest_tools());
+        tools.extend(crate::tools::commit_tools());
+        Self::new(tools)
+    }
+
     pub fn get(&self, name: &str) -> Option<&Arc<dyn AgentTool>> {
         self.tools.iter().find(|tool| tool.name() == name)
     }
@@ -132,6 +150,21 @@ mod tests {
         fn taxonomy_service(&self) -> Arc<dyn wealthfolio_core::taxonomies::TaxonomyServiceTrait> {
             unimplemented!("PanicEnv")
         }
+        fn portfolio_service(
+            &self,
+        ) -> Arc<dyn wealthfolio_core::portfolios::PortfolioServiceTrait> {
+            unimplemented!("PanicEnv")
+        }
+        fn net_worth_service(
+            &self,
+        ) -> Arc<dyn wealthfolio_core::portfolio::net_worth::NetWorthServiceTrait> {
+            unimplemented!("PanicEnv")
+        }
+        fn contribution_limit_service(
+            &self,
+        ) -> Arc<dyn wealthfolio_core::limits::ContributionLimitServiceTrait> {
+            unimplemented!("PanicEnv")
+        }
         fn cash_activity_service(
             &self,
         ) -> Arc<dyn wealthfolio_spending::cash_activities::CashActivityServiceTrait> {
@@ -150,6 +183,44 @@ mod tests {
         let catalog = AgentToolCatalog::v1_read_tools();
         let granted = AgentScopeSet::new();
         for name in catalog.iter().map(|tool| tool.name()).collect::<Vec<_>>() {
+            let err = catalog
+                .execute(Arc::new(PanicEnv), &granted, name, serde_json::json!({}))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, AgentToolError::ScopeDenied { .. }),
+                "tool {name} should be scope-denied, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn assistant_catalog_excludes_commit_tools() {
+        let catalog = AgentToolCatalog::assistant_catalog();
+        let names: Vec<&str> = catalog.iter().map(|tool| tool.name()).collect();
+        // Draft/suggest tools are present.
+        assert!(names.contains(&"record_activity"));
+        assert!(names.contains(&"prepare_asset_classification"));
+        // Commit tools are NOT exposed to the assistant.
+        assert!(!names.contains(&"commit_activity_draft"));
+        assert!(!names.contains(&"commit_activity_drafts"));
+    }
+
+    #[test]
+    fn mcp_catalog_includes_commit_tools() {
+        let catalog = AgentToolCatalog::mcp_catalog();
+        let names: Vec<&str> = catalog.iter().map(|tool| tool.name()).collect();
+        assert!(names.contains(&"commit_activity_draft"));
+        assert!(names.contains(&"commit_activity_drafts"));
+        // Read-only token still sees exactly 16 read tools.
+        assert_eq!(crate::tools::v1_read_tools().len(), 16);
+    }
+
+    #[tokio::test]
+    async fn execute_denies_commit_tools_with_empty_scopes() {
+        let catalog = AgentToolCatalog::mcp_catalog();
+        let granted = AgentScopeSet::new();
+        for name in ["commit_activity_draft", "commit_activity_drafts"] {
             let err = catalog
                 .execute(Arc::new(PanicEnv), &granted, name, serde_json::json!({}))
                 .await

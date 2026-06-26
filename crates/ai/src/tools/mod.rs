@@ -1,57 +1,50 @@
 //! AI assistant tools for portfolio data access.
 //!
-//! Read tools live in `wealthfolio-agent-tools` (shared with MCP) and are
-//! exposed to rig agents through `rig_adapter::RigAgentTool`. The tools
-//! remaining here implement rig-core's Tool trait directly:
-//! - RecordActivityTool: Create activity drafts from natural language
-//! - RecordActivitiesTool: Create multiple activity drafts from natural language
+//! Read, draft, and suggest tools live in `wealthfolio-agent-tools` (shared
+//! with MCP) and are exposed to rig agents through `rig_adapter::RigAgentTool`.
+//! The only tool remaining here implements rig-core's Tool trait directly:
 //! - ImportCsvTool: Infer CSV column mappings and validate for import
-//! - ProposeCategoriesTool: Categorize activities using rules + history
-//! - CreateCategorizationRuleTool: Define new categorization rules
-//! - PrepareAssetClassificationTool: Resolve asset classification conflicts
 //!
-//! All tools are designed to work with the AiEnvironment trait for dependency injection.
+//! It is designed to work with the AiEnvironment trait for dependency injection.
 
-pub mod asset_classification;
 pub mod constants;
-pub mod create_categorization_rule;
 pub mod import_csv;
-pub mod propose_categories;
-pub mod record_activities;
-pub mod record_activity;
 pub mod rig_adapter;
 
 // Re-export constants
 pub use constants::*;
 
-// Re-export migrated agent tools (DTOs and unit structs) for compatibility.
+// Re-export migrated agent tools (DTOs, arg/output types, and unit structs) for
+// compatibility so existing import paths via `crate::tools::` keep resolving.
 // `allocation::HoldingDto` is skipped: it collides with `holdings::HoldingDto`
 // (reach it as `wealthfolio_agent_tools::tools::allocation::HoldingDto`).
 pub use wealthfolio_agent_tools::tools::{
-    AccountCashSummary, AccountDto, ActivityDto, AllocationDto, AssetTaxonomyAssignmentDto,
-    AssetTaxonomyCategoryDto, AssetTaxonomyDto, CashBalanceEntry, CategoryExample, CategoryOption,
-    ContextSummary, GetAccounts, GetAccountsArgs, GetAccountsOutput, GetAssetAllocation,
-    GetAssetAllocationArgs, GetAssetAllocationOutput, GetAssetTaxonomyAssignments,
-    GetAssetTaxonomyAssignmentsArgs, GetAssetTaxonomyAssignmentsOutput, GetCashBalances,
-    GetCashBalancesArgs, GetCashBalancesOutput, GetGoals, GetGoalsArgs, GetGoalsOutput,
-    GetHealthStatus, GetHealthStatusArgs, GetHealthStatusOutput, GetHoldings, GetHoldingsArgs,
-    GetHoldingsOutput, GetIncome, GetIncomeArgs, GetIncomeOutput, GetPerformance,
-    GetPerformanceArgs, GetPerformanceOutput, GetValuationHistory, GetValuationHistoryArgs,
-    GetValuationHistoryOutput, GoalDto, HealthIssueDto, HoldingDto, ListAssetTaxonomies,
-    ListAssetTaxonomiesArgs, ListAssetTaxonomiesOutput, ListCategorizationContext,
-    ListCategorizationContextArgs, ListCategorizationContextOutput, PerformanceAttributionOutput,
-    PerformanceDataQualityOutput, PerformanceReturnsOutput, PerformanceRiskOutput, Proposal,
-    ResolvedAssetDto, SearchActivities, SearchActivitiesArgs, SearchActivitiesOutput,
-    TaxonomySummary, TopAssetDto, UnproposedActivity, ValuationPointDto,
+    AccountCashSummary, AccountDto, AccountOption, ActivityDraft, ActivityDraftRow, ActivityDto,
+    AiProposal, AllocationDto, AssetTaxonomyAssignmentDto, AssetTaxonomyCategoryDto,
+    AssetTaxonomyDto, AssignmentPreviewDto, BatchValidationSummary, CandidateAssignmentPreviewDto,
+    CashBalanceEntry, CategoryExample, CategoryOption, ClassificationChangesDto, ContextSummary,
+    CreateCategorizationRule, CreateCategorizationRuleArgs, CreateCategorizationRuleOutput,
+    GetAccounts, GetAccountsArgs, GetAccountsOutput, GetAssetAllocation, GetAssetAllocationArgs,
+    GetAssetAllocationOutput, GetAssetTaxonomyAssignments, GetAssetTaxonomyAssignmentsArgs,
+    GetAssetTaxonomyAssignmentsOutput, GetCashBalances, GetCashBalancesArgs, GetCashBalancesOutput,
+    GetGoals, GetGoalsArgs, GetGoalsOutput, GetHealthStatus, GetHealthStatusArgs,
+    GetHealthStatusOutput, GetHoldings, GetHoldingsArgs, GetHoldingsOutput, GetIncome,
+    GetIncomeArgs, GetIncomeOutput, GetPerformance, GetPerformanceArgs, GetPerformanceOutput,
+    GetValuationHistory, GetValuationHistoryArgs, GetValuationHistoryOutput, GoalDto,
+    HealthIssueDto, HoldingDto, ListAssetTaxonomies, ListAssetTaxonomiesArgs,
+    ListAssetTaxonomiesOutput, ListCategorizationContext, ListCategorizationContextArgs,
+    ListCategorizationContextOutput, PerformanceAttributionOutput, PerformanceDataQualityOutput,
+    PerformanceReturnsOutput, PerformanceRiskOutput, PrepareAssetClassification,
+    PrepareAssetClassificationArgs, PrepareAssetClassificationOutput, PreparedAssignmentInput,
+    PreparedTaxonomyDto, Proposal, ProposalSummary, ProposeCategories, ProposeCategoriesArgs,
+    ProposeCategoriesOutput, RecordActivities, RecordActivitiesArgs, RecordActivitiesOutput,
+    RecordActivity, RecordActivityArgs, RecordActivityOutput, ResolvedAsset, ResolvedAssetDto,
+    SearchActivities, SearchActivitiesArgs, SearchActivitiesOutput, SubtypeOption, TaxonomySummary,
+    TopAssetDto, UnproposedActivity, ValidationError, ValidationResult, ValuationPointDto,
 };
 
-// Re-export tools
-pub use asset_classification::PrepareAssetClassificationTool;
-pub use create_categorization_rule::CreateCategorizationRuleTool;
+// Re-export the assistant-local tool and the rig adapter.
 pub use import_csv::ImportCsvTool;
-pub use propose_categories::{AiProposal, ProposeCategoriesTool};
-pub use record_activities::RecordActivitiesTool;
-pub use record_activity::RecordActivityTool;
 pub use rig_adapter::RigAgentTool;
 
 use once_cell::sync::Lazy;
@@ -60,37 +53,28 @@ use wealthfolio_agent_tools::AgentToolCatalog;
 
 use crate::env::AiEnvironment;
 
-/// Process-wide catalog of migrated agent tools, shared by every chat
-/// session (tools are stateless; the environment arrives per call).
-static AGENT_CATALOG: Lazy<AgentToolCatalog> = Lazy::new(AgentToolCatalog::v1_read_tools);
+/// Process-wide catalog of agent tools available to the in-app assistant
+/// (read + draft/suggest), shared by every chat session (tools are stateless;
+/// the environment arrives per call). Commit tools are MCP-only and excluded.
+static AGENT_CATALOG: Lazy<AgentToolCatalog> = Lazy::new(AgentToolCatalog::assistant_catalog);
 
 /// The shared agent-tool catalog exposed to rig via [`RigAgentTool`].
 pub fn agent_catalog() -> &'static AgentToolCatalog {
     &AGENT_CATALOG
 }
 
-/// Container for the assistant-only rig tools, simplifying tool
-/// registration across providers. Migrated read tools are not listed here;
-/// they come from [`agent_catalog`].
+/// Container for the assistant-only rig tools. The migrated read/draft/suggest
+/// tools are not listed here; they come from [`agent_catalog`]. Only `import_csv`
+/// still implements rig's `Tool` trait directly.
 pub struct ToolSet<E: AiEnvironment> {
-    pub record_activity: RecordActivityTool<E>,
-    pub record_activities: RecordActivitiesTool<E>,
     pub import_csv: ImportCsvTool<E>,
-    pub propose_categories: ProposeCategoriesTool<E>,
-    pub create_categorization_rule: CreateCategorizationRuleTool<E>,
-    pub prepare_asset_classification: PrepareAssetClassificationTool<E>,
 }
 
 impl<E: AiEnvironment> ToolSet<E> {
-    /// Create a new tool set with all portfolio tools.
+    /// Create a new tool set with the assistant-only rig tools.
     pub fn new(env: Arc<E>, base_currency: String) -> Self {
         Self {
-            record_activity: RecordActivityTool::new(env.clone()),
-            record_activities: RecordActivitiesTool::new(env.clone()),
-            import_csv: ImportCsvTool::new(env.clone(), base_currency),
-            propose_categories: ProposeCategoriesTool::new(env.clone()),
-            create_categorization_rule: CreateCategorizationRuleTool::new(env.clone()),
-            prepare_asset_classification: PrepareAssetClassificationTool::new(env),
+            import_csv: ImportCsvTool::new(env, base_currency),
         }
     }
 }
@@ -113,33 +97,18 @@ mod tests {
     #[test]
     fn tool_names_are_exactly_the_strings_used_by_allowlist() {
         use crate::types::DEFAULT_TOOLS_ALLOWLIST;
-        let env = Arc::new(MockEnvironment::new());
-        let tools = ToolSet::new(env, "USD".to_string());
 
-        // Every tool's NAME must be in DEFAULT_TOOLS_ALLOWLIST. The reverse is
-        // checked separately (some allowlist entries are read-only data tools
-        // that aren't in ToolSet's ergonomic field list, which is fine).
-        let registered_names = vec![
-            <RecordActivityTool<MockEnvironment> as Tool>::NAME,
-            <RecordActivitiesTool<MockEnvironment> as Tool>::NAME,
-            <ImportCsvTool<MockEnvironment> as Tool>::NAME,
-            <ProposeCategoriesTool<MockEnvironment> as Tool>::NAME,
-            <CreateCategorizationRuleTool<MockEnvironment> as Tool>::NAME,
-            <PrepareAssetClassificationTool<MockEnvironment> as Tool>::NAME,
-        ];
-        for name in &registered_names {
-            assert!(
-                DEFAULT_TOOLS_ALLOWLIST.contains(name),
-                "Tool {name} is registered in ToolSet but missing from DEFAULT_TOOLS_ALLOWLIST — \
-                 add it or it'll never be enabled by default. Drift between tool NAME and \
-                 allowlist is the most common cause of 'I added a tool and the agent ignores it'.",
-            );
-        }
-        let _ = tools;
+        // The assistant-local rig tool (`import_csv`) plus every agent-catalog
+        // tool name must be present in DEFAULT_TOOLS_ALLOWLIST.
+        assert!(
+            DEFAULT_TOOLS_ALLOWLIST.contains(&<ImportCsvTool<MockEnvironment> as Tool>::NAME),
+            "import_csv is registered but missing from DEFAULT_TOOLS_ALLOWLIST",
+        );
     }
 
-    /// Every migrated catalog tool must stay in DEFAULT_TOOLS_ALLOWLIST under
-    /// its original name — names are the contract chat threads snapshot.
+    /// Every catalog tool (read + draft/suggest) must stay in
+    /// DEFAULT_TOOLS_ALLOWLIST under its original name — names are the contract
+    /// chat threads snapshot.
     #[test]
     fn agent_catalog_names_are_in_default_allowlist() {
         use crate::types::DEFAULT_TOOLS_ALLOWLIST;

@@ -20,11 +20,11 @@ use std::sync::Arc;
 use wealthfolio_agent_tools::AgentTool;
 use wealthfolio_ai::env::test_env::MockEnvironment;
 use wealthfolio_ai::tools::{
-    CreateCategorizationRuleTool, GetAccounts, GetAssetAllocation, GetAssetTaxonomyAssignments,
+    CreateCategorizationRule, GetAccounts, GetAssetAllocation, GetAssetTaxonomyAssignments,
     GetCashBalances, GetGoals, GetHealthStatus, GetHoldings, GetIncome, GetPerformance,
     GetValuationHistory, ImportCsvTool, ListAssetTaxonomies, ListCategorizationContext,
-    PrepareAssetClassificationTool, ProposeCategoriesTool, RecordActivitiesTool,
-    RecordActivityTool, RigAgentTool, SearchActivities,
+    PrepareAssetClassification, ProposeCategories, RecordActivities, RecordActivity, RigAgentTool,
+    SearchActivities,
 };
 
 fn env() -> Arc<MockEnvironment> {
@@ -96,19 +96,21 @@ macro_rules! schema_test {
     };
 }
 
-schema_test!(
-    snapshot_propose_transaction_categories,
-    ProposeCategoriesTool::new(env())
-);
+#[tokio::test]
+async fn snapshot_propose_transaction_categories() {
+    let snapshot = schema_snapshot_dyn(&adapted(ProposeCategories)).await;
+    insta::assert_json_snapshot!(snapshot);
+}
 #[tokio::test]
 async fn snapshot_list_categorization_context() {
     let snapshot = schema_snapshot_dyn(&adapted(ListCategorizationContext)).await;
     insta::assert_json_snapshot!(snapshot);
 }
-schema_test!(
-    snapshot_create_categorization_rule,
-    CreateCategorizationRuleTool::new(env())
-);
+#[tokio::test]
+async fn snapshot_create_categorization_rule() {
+    let snapshot = schema_snapshot_dyn(&adapted(CreateCategorizationRule)).await;
+    insta::assert_json_snapshot!(snapshot);
+}
 #[tokio::test]
 async fn snapshot_list_asset_taxonomies() {
     let snapshot = schema_snapshot_dyn(&adapted(ListAssetTaxonomies)).await;
@@ -119,10 +121,11 @@ async fn snapshot_get_asset_taxonomy_assignments() {
     let snapshot = schema_snapshot_dyn(&adapted(GetAssetTaxonomyAssignments)).await;
     insta::assert_json_snapshot!(snapshot);
 }
-schema_test!(
-    snapshot_prepare_asset_classification,
-    PrepareAssetClassificationTool::new(env())
-);
+#[tokio::test]
+async fn snapshot_prepare_asset_classification() {
+    let snapshot = schema_snapshot_dyn(&adapted(PrepareAssetClassification)).await;
+    insta::assert_json_snapshot!(snapshot);
+}
 #[tokio::test]
 async fn snapshot_get_accounts() {
     let snapshot = schema_snapshot_dyn(&adapted(GetAccounts)).await;
@@ -175,8 +178,16 @@ async fn snapshot_get_performance() {
     let snapshot = schema_snapshot_dyn(&adapted(GetPerformance)).await;
     insta::assert_json_snapshot!(snapshot);
 }
-schema_test!(snapshot_record_activity, RecordActivityTool::new(env()));
-schema_test!(snapshot_record_activities, RecordActivitiesTool::new(env()));
+#[tokio::test]
+async fn snapshot_record_activity() {
+    let snapshot = schema_snapshot_dyn(&adapted(RecordActivity)).await;
+    insta::assert_json_snapshot!(snapshot);
+}
+#[tokio::test]
+async fn snapshot_record_activities() {
+    let snapshot = schema_snapshot_dyn(&adapted(RecordActivities)).await;
+    insta::assert_json_snapshot!(snapshot);
+}
 schema_test!(snapshot_import_csv, ImportCsvTool::new(env(), "USD".into()));
 
 #[tokio::test]
@@ -189,8 +200,8 @@ async fn snapshot_get_health_status() {
 async fn categorization_tool_descriptions_require_widget_for_deterministic_matches() {
     let list_tool = adapted(ListCategorizationContext);
     let list_def = list_tool.definition(String::new()).await;
-    let propose_tool = ProposeCategoriesTool::new(env());
-    let propose_def = Tool::definition(&propose_tool, String::new()).await;
+    let propose_tool = adapted(ProposeCategories);
+    let propose_def = propose_tool.definition(String::new()).await;
 
     assert!(list_def.description.contains("summary.total > 0"));
     assert!(list_def.description.contains("aiProposals: []"));

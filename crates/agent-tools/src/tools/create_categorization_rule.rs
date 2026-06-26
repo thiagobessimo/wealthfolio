@@ -6,14 +6,14 @@
 //! only after the user confirms the draft widget.
 
 use log::debug;
-use rig::{completion::ToolDefinition, tool::Tool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::env::AiEnvironment;
-use crate::error::AiError;
+use crate::env::AgentEnvironment;
+use crate::scope::AgentScope;
+use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 use wealthfolio_spending::categorization_rules::{
     compile_regex_pattern, NewCategorizationRule, RuleMatchType, MAX_REGEX_PATTERN_LEN,
 };
@@ -63,84 +63,24 @@ pub struct CreateCategorizationRuleOutput {
     pub submitted_at: Option<String>,
 }
 
-pub struct CreateCategorizationRuleTool<E: AiEnvironment> {
-    env: Arc<E>,
-}
+const CREATE_CATEGORIZATION_RULE_DESCRIPTION: &str =
+    "Draft a persistent categorization rule for user confirmation. Call this when the user gives a \
+     generalizable hint like 'T&T is groceries', 'treat coffee shops as food', \
+     'gym charges are health'. The rule is not saved until the user confirms the widget. \
+     \n\nWORKFLOW: when the user supplies such a hint while reviewing a draft, \
+     call `create_categorization_rule` to render the confirmation widget, then stop. \
+     \n\nUse `pattern: \"T&T\"` with default `matchType: \"contains\"` for typical \
+     merchant-name hints. Get both `taxonomyId` and `categoryKey` from the `taxonomies` \
+     list returned by `list_categorization_context`. If the user scopes the hint to an \
+     account, pass that account's ID as `accountId`.";
 
-impl<E: AiEnvironment> CreateCategorizationRuleTool<E> {
-    pub fn new(env: Arc<E>) -> Self {
-        Self { env }
-    }
-}
+pub struct CreateCategorizationRule;
 
-impl<E: AiEnvironment> Clone for CreateCategorizationRuleTool<E> {
-    fn clone(&self) -> Self {
-        Self {
-            env: self.env.clone(),
-        }
-    }
-}
-
-impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
-    const NAME: &'static str = "create_categorization_rule";
-
-    type Error = AiError;
-    type Args = CreateCategorizationRuleArgs;
-    type Output = CreateCategorizationRuleOutput;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description:
-                "Draft a persistent categorization rule for user confirmation. Call this when the user gives a \
-                 generalizable hint like 'T&T is groceries', 'treat coffee shops as food', \
-                 'gym charges are health'. The rule is not saved until the user confirms the widget. \
-                 \n\nWORKFLOW: when the user supplies such a hint while reviewing a draft, \
-                 call `create_categorization_rule` to render the confirmation widget, then stop. \
-                 \n\nUse `pattern: \"T&T\"` with default `matchType: \"contains\"` for typical \
-                 merchant-name hints. Get both `taxonomyId` and `categoryKey` from the `taxonomies` \
-                 list returned by `list_categorization_context`. If the user scopes the hint to an \
-                 account, pass that account's ID as `accountId`."
-                    .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Short rule name shown in settings. Default: derive from pattern, e.g. \"T&T → Groceries\"."
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Substring/pattern matched against transaction notes. contains/starts_with/exact are case-insensitive; regex is a Rust regex and is case-sensitive unless it uses an inline flag like (?i). For \"contains\" matchType use a distinctive merchant fragment (e.g. \"T&T\", \"COBS BREAD\")."
-                    },
-                    "matchType": {
-                        "type": "string",
-                        "enum": ["contains", "starts_with", "exact", "regex"],
-                        "description": "Default \"contains\". Use stricter modes only if user asked."
-                    },
-                    "categoryKey": {
-                        "type": "string",
-                        "description": "Category key from the activity-scope taxonomies (e.g. \"groceries\")."
-                    },
-                    "taxonomyId": {
-                        "type": "string",
-                        "description": "Taxonomy ID containing categoryKey. Required because category keys are taxonomy-scoped."
-                    },
-                    "activityType": {
-                        "type": "string",
-                        "description": "Optional activity-type narrowing (e.g. WITHDRAWAL). Usually omit."
-                    },
-                    "accountId": {
-                        "type": "string",
-                        "description": "Optional account ID when the user explicitly scopes the rule to one account."
-                    }
-                },
-                "required": ["pattern", "taxonomyId", "categoryKey"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+impl CreateCategorizationRule {
+    pub(crate) async fn build_output(
+        env: &dyn AgentEnvironment,
+        args: CreateCategorizationRuleArgs,
+    ) -> Result<CreateCategorizationRuleOutput, AgentToolError> {
         debug!(
             "create_categorization_rule called: pattern_len={}, categoryKey={}",
             args.pattern.chars().count(),
@@ -149,31 +89,31 @@ impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
 
         let pattern = args.pattern.trim().to_string();
         if pattern.is_empty() {
-            return Err(AiError::ToolExecutionFailed(
+            return Err(AgentToolError::ExecutionFailed(
                 "pattern is required and cannot be empty".to_string(),
             ));
         }
         if pattern.len() > MAX_REGEX_PATTERN_LEN {
-            return Err(AiError::ToolExecutionFailed(format!(
+            return Err(AgentToolError::ExecutionFailed(format!(
                 "pattern must be {MAX_REGEX_PATTERN_LEN} characters or fewer"
             )));
         }
         if args.category_key.trim().is_empty() {
-            return Err(AiError::ToolExecutionFailed(
+            return Err(AgentToolError::ExecutionFailed(
                 "categoryKey is required and cannot be empty".to_string(),
             ));
         }
         if args.taxonomy_id.trim().is_empty() {
-            return Err(AiError::ToolExecutionFailed(
+            return Err(AgentToolError::ExecutionFailed(
                 "taxonomyId is required and cannot be empty".to_string(),
             ));
         }
 
         // Resolve (taxonomy_id, category_key) → (category_id, path) using the live taxonomy.
-        let tax_service = self.env.taxonomy_service();
+        let tax_service = env.taxonomy_service();
         let taxonomies = tax_service
             .get_taxonomies_with_categories()
-            .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+            .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
 
         let mut key_lookup: HashMap<(String, String), (String, Vec<String>)> = HashMap::new();
         for entry in &taxonomies {
@@ -214,7 +154,7 @@ impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
         let Some((category_id, path_parts)) =
             key_lookup.get(&(taxonomy_id.clone(), category_key.clone()))
         else {
-            return Err(AiError::ToolExecutionFailed(format!(
+            return Err(AgentToolError::ExecutionFailed(format!(
                 "Unknown taxonomyId/categoryKey \"{}\" / \"{}\". Pick both from `list_categorization_context.taxonomies`.",
                 taxonomy_id, category_key
             )));
@@ -222,14 +162,14 @@ impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
 
         let match_type = match args.match_type.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => RuleMatchType::try_parse(s).ok_or_else(|| {
-                AiError::ToolExecutionFailed(format!("unsupported matchType: {s}"))
+                AgentToolError::ExecutionFailed(format!("unsupported matchType: {s}"))
             })?,
             None => RuleMatchType::Contains,
             Some(_) => RuleMatchType::Contains,
         };
         if matches!(match_type, RuleMatchType::Regex) {
             compile_regex_pattern(&pattern)
-                .map_err(|err| AiError::ToolExecutionFailed(format!("invalid regex: {err}")))?;
+                .map_err(|err| AgentToolError::ExecutionFailed(format!("invalid regex: {err}")))?;
         }
 
         let category_path = path_parts.join(" / ");
@@ -250,11 +190,10 @@ impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
             .filter(|id| !id.is_empty())
             .map(str::to_string);
         let account_name = if let Some(account_id) = account_id.as_deref() {
-            let account = self
-                .env
+            let account = env
                 .account_service()
                 .get_account(account_id)
-                .map_err(|e| AiError::ToolExecutionFailed(e.to_string()))?;
+                .map_err(|e| AgentToolError::ExecutionFailed(e.to_string()))?;
             Some(account.name)
         } else {
             None
@@ -294,6 +233,75 @@ impl<E: AiEnvironment + 'static> Tool for CreateCategorizationRuleTool<E> {
     }
 }
 
+#[async_trait::async_trait]
+impl AgentTool for CreateCategorizationRule {
+    fn name(&self) -> &'static str {
+        "create_categorization_rule"
+    }
+
+    fn description(&self) -> &'static str {
+        CREATE_CATEGORIZATION_RULE_DESCRIPTION
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Short rule name shown in settings. Default: derive from pattern, e.g. \"T&T → Groceries\"."
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Substring/pattern matched against transaction notes. contains/starts_with/exact are case-insensitive; regex is a Rust regex and is case-sensitive unless it uses an inline flag like (?i). For \"contains\" matchType use a distinctive merchant fragment (e.g. \"T&T\", \"COBS BREAD\")."
+                },
+                "matchType": {
+                    "type": "string",
+                    "enum": ["contains", "starts_with", "exact", "regex"],
+                    "description": "Default \"contains\". Use stricter modes only if user asked."
+                },
+                "categoryKey": {
+                    "type": "string",
+                    "description": "Category key from the activity-scope taxonomies (e.g. \"groceries\")."
+                },
+                "taxonomyId": {
+                    "type": "string",
+                    "description": "Taxonomy ID containing categoryKey. Required because category keys are taxonomy-scoped."
+                },
+                "activityType": {
+                    "type": "string",
+                    "description": "Optional activity-type narrowing (e.g. WITHDRAWAL). Usually omit."
+                },
+                "accountId": {
+                    "type": "string",
+                    "description": "Optional account ID when the user explicitly scopes the rule to one account."
+                }
+            },
+            "required": ["pattern", "taxonomyId", "categoryKey"]
+        })
+    }
+
+    fn required_scopes(&self) -> &'static [AgentScope] {
+        &[AgentScope::ClassificationSuggest]
+    }
+
+    fn access_level(&self) -> AgentToolAccess {
+        AgentToolAccess::Suggest
+    }
+
+    async fn call(
+        &self,
+        env: Arc<dyn AgentEnvironment>,
+        args: serde_json::Value,
+    ) -> Result<AgentToolResult, AgentToolError> {
+        let args: CreateCategorizationRuleArgs = serde_json::from_value(args)?;
+        let output = CreateCategorizationRule::build_output(env.as_ref(), args).await?;
+        Ok(AgentToolResult {
+            content: serde_json::to_value(output)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,7 +310,7 @@ mod tests {
     /// If this breaks, every saved chat thread that targets this tool may also break.
     #[test]
     fn schema_required_fields_are_pattern_and_category_key() {
-        let json = build_definition_parameters();
+        let json = CreateCategorizationRule.input_schema();
         let required = json["required"]
             .as_array()
             .expect("required is an array")
@@ -319,7 +327,7 @@ mod tests {
 
     #[test]
     fn schema_match_type_enum_matches_rule_match_type_variants() {
-        let json = build_definition_parameters();
+        let json = CreateCategorizationRule.input_schema();
         let allowed = json["properties"]["matchType"]["enum"]
             .as_array()
             .expect("matchType.enum is an array")
@@ -371,28 +379,6 @@ mod tests {
         assert_eq!(args.match_type.as_deref(), Some("starts_with"));
         assert_eq!(args.activity_type.as_deref(), Some("WITHDRAWAL"));
         assert_eq!(args.account_id.as_deref(), Some("account-1"));
-    }
-
-    /// Helper that mirrors what `Tool::definition` returns. Kept duplicated here
-    /// (rather than calling `.definition()`) because that path is async + needs
-    /// an env. The schema is what matters.
-    fn build_definition_parameters() -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": { "type": "string" },
-                "pattern": { "type": "string" },
-                "matchType": {
-                    "type": "string",
-                    "enum": ["contains", "starts_with", "exact", "regex"],
-                },
-                "taxonomyId": { "type": "string" },
-                "categoryKey": { "type": "string" },
-                "activityType": { "type": "string" },
-                "accountId": { "type": "string" }
-            },
-            "required": ["pattern", "taxonomyId", "categoryKey"]
-        })
     }
 
     #[test]

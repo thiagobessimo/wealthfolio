@@ -7,14 +7,23 @@
 pub mod accounts;
 pub mod activities;
 pub mod allocation;
+pub mod asset_classification;
 pub mod asset_taxonomies;
 pub mod cash_balances;
 pub mod categorization_context;
+pub mod commit_activity;
+pub mod contribution_limits;
+pub mod create_categorization_rule;
 pub mod goals;
 pub mod health;
 pub mod holdings;
 pub mod income;
+pub mod net_worth;
 pub mod performance;
+pub mod portfolios;
+pub mod propose_categories;
+pub mod record_activities;
+pub mod record_activity;
 pub mod valuation;
 
 pub use accounts::{AccountDto, GetAccounts, GetAccountsArgs, GetAccountsOutput};
@@ -39,16 +48,51 @@ pub use categorization_context::{
     ListCategorizationContextArgs, ListCategorizationContextOutput, Proposal, TaxonomySummary,
     UnproposedActivity,
 };
+pub use contribution_limits::{
+    ContributionLimitDto, GetContributionLimits, GetContributionLimitsArgs,
+    GetContributionLimitsOutput,
+};
 pub use goals::{GetGoals, GetGoalsArgs, GetGoalsOutput, GoalDto};
 pub use health::{GetHealthStatus, GetHealthStatusArgs, GetHealthStatusOutput, HealthIssueDto};
 pub use holdings::{GetHoldings, GetHoldingsArgs, GetHoldingsOutput, HoldingDto};
 pub use income::{GetIncome, GetIncomeArgs, GetIncomeOutput, TopAssetDto};
+pub use net_worth::{
+    GetNetWorth, GetNetWorthArgs, GetNetWorthOutput, NetWorthHistoryPointDto, NetWorthLineDto,
+};
 pub use performance::{
     GetPerformance, GetPerformanceArgs, GetPerformanceOutput, PerformanceAttributionOutput,
     PerformanceDataQualityOutput, PerformanceReturnsOutput, PerformanceRiskOutput,
 };
+pub use portfolios::{GetPortfolios, GetPortfoliosArgs, GetPortfoliosOutput, PortfolioDto};
 pub use valuation::{
     GetValuationHistory, GetValuationHistoryArgs, GetValuationHistoryOutput, ValuationPointDto,
+};
+
+// Draft/suggest tools migrated from `wealthfolio-ai`.
+pub use asset_classification::{
+    AssignmentPreviewDto, CandidateAssignmentPreviewDto, ClassificationChangesDto,
+    PrepareAssetClassification, PrepareAssetClassificationArgs, PrepareAssetClassificationOutput,
+    PreparedAssignmentInput, PreparedTaxonomyDto,
+};
+pub use create_categorization_rule::{
+    CreateCategorizationRule, CreateCategorizationRuleArgs, CreateCategorizationRuleOutput,
+};
+pub use propose_categories::{
+    AiProposal, ProposalSummary, ProposeCategories, ProposeCategoriesArgs, ProposeCategoriesOutput,
+};
+pub use record_activities::{
+    ActivityDraftRow, BatchValidationSummary, RecordActivities, RecordActivitiesArgs,
+    RecordActivitiesOutput,
+};
+pub use record_activity::{
+    AccountOption, ActivityDraft, RecordActivity, RecordActivityArgs, RecordActivityOutput,
+    ResolvedAsset, SubtypeOption, ValidationError, ValidationResult,
+};
+
+// MCP-only commit tools.
+pub use commit_activity::{
+    CommitActivityDraft, CommitActivityDraftOutput, CommitActivityDrafts, CommitActivityDraftsArgs,
+    CommitActivityDraftsOutput, CommitError, CommittedActivity,
 };
 
 use std::sync::Arc;
@@ -74,6 +118,30 @@ pub fn v1_read_tools() -> Vec<Arc<dyn AgentTool>> {
         Arc::new(ListCategorizationContext),
         Arc::new(ListAssetTaxonomies),
         Arc::new(GetAssetTaxonomyAssignments),
+        Arc::new(GetPortfolios),
+        Arc::new(GetNetWorth),
+        Arc::new(GetContributionLimits),
+    ]
+}
+
+/// The draft/suggest tools, in catalog (and LLM-visible) order. These prepare
+/// drafts or proposals for user review — they never mutate data themselves.
+pub fn draft_suggest_tools() -> Vec<Arc<dyn AgentTool>> {
+    vec![
+        Arc::new(RecordActivity),
+        Arc::new(RecordActivities),
+        Arc::new(ProposeCategories),
+        Arc::new(CreateCategorizationRule),
+        Arc::new(PrepareAssetClassification),
+    ]
+}
+
+/// The MCP-only commit tools that persist reviewed drafts. Never exposed to the
+/// in-app assistant (which writes through its confirmation widget instead).
+pub fn commit_tools() -> Vec<Arc<dyn AgentTool>> {
+    vec![
+        Arc::new(CommitActivityDraft),
+        Arc::new(CommitActivityDrafts),
     ]
 }
 
@@ -102,6 +170,9 @@ mod tests {
                 "list_categorization_context",
                 "list_asset_taxonomies",
                 "get_asset_taxonomy_assignments",
+                "get_portfolios",
+                "get_net_worth",
+                "get_contribution_limits",
             ]
         );
     }

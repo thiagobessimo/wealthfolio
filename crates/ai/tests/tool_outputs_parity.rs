@@ -24,7 +24,8 @@ use wealthfolio_ai::env::test_env::{
 use wealthfolio_ai::tools::{
     GetAccounts, GetAssetAllocation, GetAssetTaxonomyAssignments, GetCashBalances, GetGoals,
     GetHealthStatus, GetHoldings, GetIncome, GetPerformance, GetValuationHistory,
-    ListAssetTaxonomies, ListCategorizationContext, RigAgentTool, SearchActivities,
+    ListAssetTaxonomies, ListCategorizationContext, PrepareAssetClassification, RecordActivities,
+    RecordActivity, RigAgentTool, SearchActivities,
 };
 use wealthfolio_core::accounts::{Account, TrackingMode};
 use wealthfolio_core::activities::{Activity, ActivityStatus};
@@ -642,4 +643,101 @@ output_test_dyn_env!(
     ListCategorizationContext,
     categorization_env(),
     { "activityIds": ["cash-a"] }
+);
+
+// ---------------------------------------------------------------------------
+// Draft/suggest tool outputs (migrated from `crates/ai/src/tools/*.rs` inline
+// tests). These pin the editable-draft behavior the assistant relies on.
+// ---------------------------------------------------------------------------
+
+/// Env with a single account so account auto-selection applies (the common
+/// record_activity flow). No quote results, so symbols fall back to custom.
+fn single_account_env() -> Arc<MockEnvironment> {
+    let mut env = MockEnvironment::new();
+    env.account_service = Arc::new(MockAccountService {
+        accounts: vec![fixture_account("acc-1", "Main Broker", "SECURITIES", "USD")],
+    });
+    Arc::new(env)
+}
+
+output_test_dyn_env!(
+    output_record_activity_buy,
+    RecordActivity,
+    single_account_env(),
+    {
+        "activityType": "BUY",
+        "symbol": "AAPL",
+        "activityDate": "2026-01-17",
+        "quantity": 20.0,
+        "unitPrice": 240.0
+    }
+);
+output_test_dyn_env!(
+    output_record_activity_deposit,
+    RecordActivity,
+    single_account_env(),
+    { "activityType": "DEPOSIT", "activityDate": "2026-01-17", "amount": 5000.0 }
+);
+output_test_dyn_env!(
+    output_record_activity_dividend_drip,
+    RecordActivity,
+    single_account_env(),
+    {
+        "activityType": "DIVIDEND",
+        "symbol": "VTI",
+        "activityDate": "2026-01-17",
+        "quantity": 2.0,
+        "subtype": "DRIP"
+    }
+);
+output_test_dyn_env!(
+    output_record_activities_mixed,
+    RecordActivities,
+    single_account_env(),
+    {
+        "activities": [
+            { "activityType": "DEPOSIT", "activityDate": "2026-01-17", "amount": 1000.0 },
+            { "activityType": "DEPOSIT", "activityDate": "2026-01-17" }
+        ]
+    }
+);
+
+// prepare_asset_classification — reuse the seeded classification env.
+output_test_dyn_env!(
+    output_prepare_asset_classification_draft,
+    PrepareAssetClassification,
+    classification_env(),
+    {
+        "assetQuery": "AAPL",
+        "taxonomyId": "asset-tax",
+        "assignments": [
+            { "categoryId": "equity", "weightBasisPoints": 6000, "sourceLabel": "Equity" },
+            { "categoryId": "cash", "weightBasisPoints": 3000, "sourceLabel": "Cash" }
+        ]
+    }
+);
+output_test_dyn_env!(
+    output_prepare_asset_classification_ambiguous,
+    PrepareAssetClassification,
+    classification_env(),
+    {
+        "assetQuery": "VT",
+        "taxonomyId": "asset-tax",
+        "assignments": [
+            { "categoryId": "equity", "weightBasisPoints": 9000, "sourceLabel": "Equity" }
+        ]
+    }
+);
+output_test_dyn_env!(
+    output_prepare_asset_classification_duplicate_error,
+    PrepareAssetClassification,
+    classification_env(),
+    {
+        "assetQuery": "AAPL",
+        "taxonomyId": "asset-tax",
+        "assignments": [
+            { "categoryId": "equity", "weightBasisPoints": 5000, "sourceLabel": "Equity" },
+            { "categoryId": "equity", "weightBasisPoints": 5000, "sourceLabel": "Equity" }
+        ]
+    }
 );

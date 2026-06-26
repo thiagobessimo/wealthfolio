@@ -1674,6 +1674,22 @@ impl AgentEnvironment for MockEnvironment {
         self.taxonomy_service.clone()
     }
 
+    fn portfolio_service(&self) -> Arc<dyn wealthfolio_core::portfolios::PortfolioServiceTrait> {
+        unimplemented!("portfolio_service not used in AI mock environment")
+    }
+
+    fn net_worth_service(
+        &self,
+    ) -> Arc<dyn wealthfolio_core::portfolio::net_worth::NetWorthServiceTrait> {
+        unimplemented!("net_worth_service not used in AI mock environment")
+    }
+
+    fn contribution_limit_service(
+        &self,
+    ) -> Arc<dyn wealthfolio_core::limits::ContributionLimitServiceTrait> {
+        unimplemented!("contribution_limit_service not used in AI mock environment")
+    }
+
     fn cash_activity_service(&self) -> Arc<dyn CashActivityServiceTrait> {
         self.cash_activity_service.clone()
     }
