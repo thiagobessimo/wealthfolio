@@ -287,7 +287,18 @@ All configuration is done via environment variables in `.env.web`.
   - `WF_OIDC_ALLOWED_EMAILS` / `WF_OIDC_ALLOWED_SUBS` - **Optional**
     comma-separated allowlists matched against the ID token's `email` / `sub`
     claims. With neither set, any IdP-authenticated user is allowed (a warning
-    is logged) — set an allowlist when using a shared IdP.
+    is logged) — set an allowlist when using a shared IdP. An `email` is only
+    honored when the IdP asserts `email_verified=true`; `WF_OIDC_ALLOWED_SUBS`
+    is the stronger control (stable, issuer-scoped) and is recommended on
+    shared/multi-tenant IdPs.
+  - `WF_OIDC_POST_LOGOUT_REDIRECT_URL` - **Optional**. When the IdP advertises
+    an `end_session_endpoint`, sign-out also ends the IdP session (RP-Initiated
+    Logout); otherwise logout is local-only. Set this to land back on the app
+    afterward — it must be **registered** with the IdP (e.g. Keycloak's "Valid
+    post logout redirect URIs"). If unset, the IdP shows its own logged-out
+    page.
+  - `WF_OIDC_RP_LOGOUT` - **Optional**, default `true`. Set to `false` to force
+    local-only logout even when the IdP supports RP-Initiated Logout.
 - `WF_COOKIE_SECURE` - Controls the `Secure` attribute on session cookies
   (default: `auto`)
   - `auto` - set `Secure` only when `X-Forwarded-Proto: https` is present

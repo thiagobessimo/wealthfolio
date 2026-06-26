@@ -155,7 +155,12 @@ pub fn app_router(state: Arc<AppState>, config: &Config) -> Router {
         .finish()
         .expect("valid governor config");
 
-    // Rate limit the OIDC callback the same way (per peer IP).
+    // Rate limit the OIDC start + callback the same way (per peer IP).
+    let oidc_login_governor = GovernorConfigBuilder::default()
+        .per_second(12)
+        .burst_size(5)
+        .finish()
+        .expect("valid governor config");
     let oidc_governor = GovernorConfigBuilder::default()
         .per_second(12)
         .burst_size(5)
@@ -172,7 +177,11 @@ pub fn app_router(state: Arc<AppState>, config: &Config) -> Router {
         )
         .route("/auth/logout", axum::routing::post(auth::logout))
         .route("/auth/me", get(auth::auth_me))
-        .route("/auth/oidc/login", get(oidc::oidc_login))
+        .route(
+            "/auth/oidc/login",
+            get(oidc::oidc_login).layer(GovernorLayer::new(oidc_login_governor)),
+        )
+        .route("/auth/oidc/logout", get(oidc::oidc_logout))
         .route(
             "/auth/oidc/callback",
             get(oidc::oidc_callback).layer(GovernorLayer::new(oidc_governor)),

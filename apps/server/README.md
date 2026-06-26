@@ -42,7 +42,9 @@ Key environment variables
   - `WF_OIDC_CLIENT_SECRET`: Optional client secret (PKCE is always used; set this for confidential clients).
   - `WF_OIDC_REDIRECT_URL`: Required when OIDC is enabled. Must be registered in the IdP, e.g. `https://your.host/api/v1/auth/oidc/callback`.
   - `WF_OIDC_SCOPES`: Optional space-separated scopes. Default `openid email profile`.
-  - `WF_OIDC_ALLOWED_EMAILS` / `WF_OIDC_ALLOWED_SUBS`: Optional comma-separated allowlists matched against the ID token's `email` / `sub` claims. With neither set, **any** user the IdP authenticates is granted access (a warning is logged at startup) — set an allowlist when using a shared IdP.
+  - `WF_OIDC_ALLOWED_EMAILS` / `WF_OIDC_ALLOWED_SUBS`: Optional comma-separated allowlists matched against the ID token's `email` / `sub` claims. With neither set, **any** user the IdP authenticates is granted access (a warning is logged at startup) — set an allowlist when using a shared IdP. An `email` is only honored when the IdP asserts `email_verified=true`; `WF_OIDC_ALLOWED_SUBS` is the stronger control (the `sub` is stable and issuer-scoped) and is recommended on shared/multi-tenant IdPs.
+  - `WF_OIDC_POST_LOGOUT_REDIRECT_URL`: **Optional**. When the IdP advertises an `end_session_endpoint`, sign-out performs RP-Initiated Logout (ends the IdP session too); otherwise logout is local-only. Set this to return to the app after IdP logout — it must be **registered** with the IdP (e.g. Keycloak's "Valid post logout redirect URIs"). If unset, the IdP shows its own logged-out page.
+  - `WF_OIDC_RP_LOGOUT`: **Optional**, default `true`. Set to `false` to force local-only logout even when the IdP supports RP-Initiated Logout.
 - `WF_SECRET_FILE`: Optional override for where encrypted secrets are stored. Defaults to `<data-root>/secrets.json`.
 
 Notes

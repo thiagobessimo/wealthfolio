@@ -7,8 +7,11 @@
 //!
 //! All assertions live in one test to avoid races on the process-global env vars.
 
+use std::net::SocketAddr;
+
 use axum::{
     body::{to_bytes, Body},
+    extract::ConnectInfo,
     http::{header, Request},
     routing::get,
     Json, Router,
@@ -40,6 +43,7 @@ async fn spawn_mock_idp() -> String {
                         "authorization_endpoint": format!("{issuer}/authorize"),
                         "token_endpoint": format!("{issuer}/token"),
                         "jwks_uri": format!("{issuer}/jwks"),
+                        "end_session_endpoint": format!("{issuer}/logout"),
                         "response_types_supported": ["code"],
                         "subject_types_supported": ["public"],
                         "id_token_signing_alg_values_supported": ["RS256"],
@@ -130,16 +134,15 @@ async fn oidc_only_mode_status_and_login_redirect() {
     assert_eq!(unauth.status(), 401);
 
     // 3. The login route redirects to the IdP and sets the encrypted tx cookie.
-    let login = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/auth/oidc/login")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
+    let mut login_req = Request::builder()
+        .uri("/api/v1/auth/oidc/login")
+        .body(Body::empty())
         .unwrap();
+    // The login governor needs the peer IP via ConnectInfo.
+    login_req
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    let login = app.clone().oneshot(login_req).await.unwrap();
     assert!(
         login.status().is_redirection(),
         "login should redirect, got {}",
@@ -173,6 +176,41 @@ async fn oidc_only_mode_status_and_login_redirect() {
     assert!(
         set_cookie.contains("Path=/api/v1/auth/oidc"),
         "tx cookie is path-scoped"
+    );
+
+    // 4. Logout with no OIDC session cookie falls back to a local logout
+    //    (redirect to "/") and clears the session cookie.
+    let logout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/oidc/logout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        logout.status().is_redirection(),
+        "logout should redirect, got {}",
+        logout.status()
+    );
+    assert_eq!(
+        logout.headers().get(header::LOCATION).unwrap(),
+        "/",
+        "no OIDC session -> local logout to /"
+    );
+    let logout_cookies: Vec<String> = logout
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        logout_cookies
+            .iter()
+            .any(|c| c.contains("wf_session=") && c.contains("Max-Age=0")),
+        "logout should clear wf_session"
     );
 
     cleanup_env();

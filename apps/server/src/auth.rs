@@ -283,6 +283,12 @@ fn build_session_cookie(token: &str, max_age_secs: u64, secure: bool) -> String 
     )
 }
 
+/// Builds a `Set-Cookie` value that immediately clears the session cookie.
+/// Shared by password logout and OIDC logout so both expire the same cookie.
+pub fn clear_session_cookie(secure: bool) -> String {
+    build_session_cookie("", 0, secure)
+}
+
 pub async fn login(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     headers: HeaderMap,
@@ -311,7 +317,7 @@ pub async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> R
         .auth
         .as_ref()
         .is_some_and(|a| a.should_secure_cookie(&headers));
-    let cookie_value = build_session_cookie("", 0, secure);
+    let cookie_value = clear_session_cookie(secure);
     let mut response = StatusCode::NO_CONTENT.into_response();
     if let Ok(val) = HeaderValue::from_str(&cookie_value) {
         response.headers_mut().insert(SET_COOKIE, val);

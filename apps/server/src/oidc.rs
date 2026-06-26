@@ -10,6 +10,7 @@
 //! stateless and survives restarts.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{Query, State},
@@ -38,6 +39,15 @@ const TX_COOKIE_NAME: &str = "wf_oidc_tx";
 const TX_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 const TX_COOKIE_TTL_SECS: u64 = 300;
 
+/// Holds the encrypted ID token so logout can send it as `id_token_hint` for
+/// RP-Initiated Logout. Scoped to the OIDC routes only.
+const ID_COOKIE_NAME: &str = "wf_oidc_id";
+const ID_COOKIE_PATH: &str = "/api/v1/auth/oidc";
+/// Cap the encrypted id-token cookie value so the whole cookie stays under the
+/// ~4 KB per-cookie limit browsers enforce; oversized tokens fall back to local
+/// logout rather than being silently dropped.
+const ID_COOKIE_MAX_VALUE_LEN: usize = 3500;
+
 /// Parsed `WF_OIDC_*` configuration. Present iff issuer + client id are set.
 #[derive(Clone, Debug)]
 pub struct OidcConfig {
@@ -48,6 +58,13 @@ pub struct OidcConfig {
     pub scopes: Vec<String>,
     pub allowed_emails: Vec<String>,
     pub allowed_subs: Vec<String>,
+    /// Where the IdP returns the browser after RP-Initiated Logout. Must be
+    /// registered with the IdP. When `None`, the param is omitted (the IdP shows
+    /// its own post-logout page), which maximizes provider compatibility.
+    pub post_logout_redirect_url: Option<String>,
+    /// Whether to perform RP-Initiated Logout when the IdP supports it.
+    /// Default `true`; set `WF_OIDC_RP_LOGOUT=false` to force local-only logout.
+    pub rp_logout: bool,
 }
 
 impl OidcConfig {
@@ -81,6 +98,11 @@ impl OidcConfig {
                     );
                 }
 
+                // Default true; only "false"/"0"/"no" disable RP-initiated logout.
+                let rp_logout = env_nonempty("WF_OIDC_RP_LOGOUT")
+                    .map(|v| !matches!(v.to_ascii_lowercase().as_str(), "false" | "0" | "no"))
+                    .unwrap_or(true);
+
                 Some(Self {
                     issuer_url,
                     client_id,
@@ -89,6 +111,8 @@ impl OidcConfig {
                     scopes,
                     allowed_emails,
                     allowed_subs,
+                    post_logout_redirect_url: env_nonempty("WF_OIDC_POST_LOGOUT_REDIRECT_URL"),
+                    rp_logout,
                 })
             }
             _ => panic!(
@@ -105,12 +129,18 @@ impl OidcConfig {
 pub struct OidcManager {
     provider_metadata: CoreProviderMetadata,
     client_id: ClientId,
+    /// Raw client id string, used for the `client_id` logout parameter.
+    client_id_str: String,
     client_secret: Option<ClientSecret>,
     redirect_url: RedirectUrl,
     scopes: Vec<String>,
     /// Lowercased for case-insensitive comparison.
     allowed_emails: Vec<String>,
     allowed_subs: Vec<String>,
+    /// `end_session_endpoint` from discovery, if the IdP advertises one.
+    end_session_endpoint: Option<String>,
+    post_logout_redirect_url: Option<String>,
+    rp_logout: bool,
     http_client: reqwest::Client,
     encryption_key: [u8; 32],
 }
@@ -119,8 +149,12 @@ impl OidcManager {
     /// Performs OIDC discovery against the issuer. Called once at startup.
     pub async fn discover(config: &OidcConfig, encryption_key: [u8; 32]) -> anyhow::Result<Self> {
         // Disallow redirects: discovery and token endpoints must be hit directly.
+        // Bounded timeouts so a slow/unreachable IdP can't hang startup discovery
+        // or tie up a worker during the token exchange in `oidc_callback`.
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
             .build()?;
 
         let issuer = IssuerUrl::new(config.issuer_url.clone())
@@ -131,9 +165,19 @@ impl OidcManager {
         let redirect_url = RedirectUrl::new(config.redirect_url.clone())
             .map_err(|e| anyhow::anyhow!("Invalid WF_OIDC_REDIRECT_URL: {e}"))?;
 
+        // `end_session_endpoint` belongs to the RP-Initiated Logout spec and is
+        // not part of CoreProviderMetadata, so read it from the discovery doc
+        // directly. Best-effort: absence just means logout stays local-only.
+        let end_session_endpoint = if config.rp_logout {
+            fetch_end_session_endpoint(&http_client, &config.issuer_url).await
+        } else {
+            None
+        };
+
         Ok(Self {
             provider_metadata,
             client_id: ClientId::new(config.client_id.clone()),
+            client_id_str: config.client_id.clone(),
             client_secret: config.client_secret.clone().map(ClientSecret::new),
             redirect_url,
             scopes: config.scopes.clone(),
@@ -143,6 +187,9 @@ impl OidcManager {
                 .map(|e| e.to_ascii_lowercase())
                 .collect(),
             allowed_subs: config.allowed_subs.clone(),
+            end_session_endpoint,
+            post_logout_redirect_url: config.post_logout_redirect_url.clone(),
+            rp_logout: config.rp_logout,
             http_client,
             encryption_key,
         })
@@ -179,11 +226,21 @@ impl OidcManager {
             }
         }
         if !self.allowed_emails.is_empty() {
-            if let Some(email) = claims.email() {
-                let email = email.as_str().to_ascii_lowercase();
-                if self.allowed_emails.iter().any(|e| e == &email) {
-                    return true;
+            // Only trust the email claim when the IdP asserts it is verified.
+            // An unverified email can be attacker-chosen on multi-tenant or
+            // self-signup IdPs, which would otherwise bypass the allowlist.
+            if claims.email_verified() == Some(true) {
+                if let Some(email) = claims.email() {
+                    let email = email.as_str().to_ascii_lowercase();
+                    if self.allowed_emails.iter().any(|e| e == &email) {
+                        return true;
+                    }
                 }
+            } else if claims.email().is_some() {
+                tracing::warn!(
+                    "OIDC: ignoring an unverified `email` claim for the allowlist. \
+                     Prefer WF_OIDC_ALLOWED_SUBS, or use an IdP that sets email_verified."
+                );
             }
         }
         false
@@ -275,8 +332,10 @@ pub async fn oidc_callback(
         return error_redirect("oidc_expired");
     };
 
-    // CSRF: the returned `state` must match what we issued.
-    if tx.csrf != returned_state {
+    // CSRF: the returned `state` must match what we issued. Constant-time to
+    // avoid leaking a comparison-timing oracle (defense-in-depth; the expected
+    // value is already sealed in the AEAD tx cookie).
+    if !constant_time_eq(tx.csrf.as_bytes(), returned_state.as_bytes()) {
         return error_redirect("oidc_state_mismatch");
     }
 
@@ -318,11 +377,15 @@ pub async fn oidc_callback(
         return error_redirect("oidc_forbidden");
     }
 
+    // Capture the raw ID token JWT now, for RP-Initiated Logout (id_token_hint).
+    let id_token_str = id_token.to_string();
+
     // Mint the shared session cookie. `auth` is always present when OIDC is on.
     let Some(auth) = state.auth.clone() else {
         return error_redirect("oidc_internal");
     };
-    let Ok((session_cookie, _ttl)) = auth.issue_session_cookie(&headers) else {
+    let secure = cookie_secure(&state, &headers);
+    let Ok((session_cookie, ttl_secs)) = auth.issue_session_cookie(&headers) else {
         return error_redirect("oidc_internal");
     };
 
@@ -334,34 +397,147 @@ pub async fn oidc_callback(
     if let Ok(val) = HeaderValue::from_str(&clear_tx_cookie()) {
         out.append(SET_COOKIE, val);
     }
+    // Persist the encrypted ID token only when RP-Initiated Logout can use it,
+    // and only when it fits in a cookie. Oversized tokens (e.g. many group
+    // claims) would be silently dropped by the browser, so degrade to local
+    // logout intentionally instead.
+    if oidc.rp_logout && oidc.end_session_endpoint.is_some() {
+        match encrypt_bytes(&oidc.encryption_key, id_token_str.as_bytes()) {
+            Ok(encrypted_id) if encrypted_id.len() <= ID_COOKIE_MAX_VALUE_LEN => {
+                if let Ok(val) =
+                    HeaderValue::from_str(&build_id_cookie(&encrypted_id, ttl_secs, secure))
+                {
+                    out.append(SET_COOKIE, val);
+                }
+            }
+            Ok(_) => tracing::warn!(
+                "OIDC id_token is too large to store in a cookie; logout will fall \
+                 back to local-only for this session."
+            ),
+            Err(_) => {}
+        }
+    }
     response
 }
 
-fn encrypt_tx(key: &[u8; 32], tx: &OidcTx) -> anyhow::Result<String> {
-    let serialized = serde_json::to_vec(tx)?;
+/// `GET /api/v1/auth/oidc/logout` — always clears the local session, and when
+/// the IdP advertises `end_session_endpoint` AND this browser has an OIDC
+/// session (the encrypted ID-token cookie), redirects to the provider for
+/// RP-Initiated Logout. Otherwise redirects locally to `/`. Password sessions
+/// (no ID-token cookie) therefore only get a local logout.
+pub async fn oidc_logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let secure = cookie_secure(&state, &headers);
+
+    let target = state
+        .oidc
+        .as_ref()
+        .filter(|oidc| oidc.rp_logout)
+        .and_then(|oidc| {
+            let end_session = oidc.end_session_endpoint.as_ref()?;
+            // Only redirect to the IdP when this browser actually signed in via OIDC.
+            let id_token_hint = read_cookie(&headers, ID_COOKIE_NAME)
+                .and_then(|c| decrypt_bytes(&oidc.encryption_key, &c).ok())
+                .and_then(|bytes| String::from_utf8(bytes).ok())?;
+            Some(build_end_session_url(
+                end_session,
+                &oidc.client_id_str,
+                Some(&id_token_hint),
+                oidc.post_logout_redirect_url.as_deref(),
+            ))
+        })
+        .unwrap_or_else(|| "/".to_string());
+
+    let mut response = Redirect::to(&target).into_response();
+    let out = response.headers_mut();
+    if let Ok(val) = HeaderValue::from_str(&crate::auth::clear_session_cookie(secure)) {
+        out.append(SET_COOKIE, val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&clear_id_cookie()) {
+        out.append(SET_COOKIE, val);
+    }
+    response
+}
+
+/// Best-effort read of `end_session_endpoint` from the discovery document.
+/// `end_session_endpoint` is part of the RP-Initiated Logout spec (not core
+/// discovery), so it is fetched separately; absence keeps logout local-only.
+async fn fetch_end_session_endpoint(client: &reqwest::Client, issuer_url: &str) -> Option<String> {
+    let base = issuer_url.trim_end_matches('/');
+    let url = format!("{base}/.well-known/openid-configuration");
+    let doc = client
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .json::<serde_json::Value>()
+        .await
+        .ok()?;
+    let endpoint = doc
+        .get("end_session_endpoint")?
+        .as_str()?
+        .trim()
+        .to_string();
+    (!endpoint.is_empty()).then_some(endpoint)
+}
+
+/// Builds the RP-Initiated Logout URL (OpenID Connect RP-Initiated Logout 1.0).
+fn build_end_session_url(
+    end_session_endpoint: &str,
+    client_id: &str,
+    id_token_hint: Option<&str>,
+    post_logout_redirect_uri: Option<&str>,
+) -> String {
+    let mut params: Vec<(&str, &str)> = vec![("client_id", client_id)];
+    if let Some(hint) = id_token_hint {
+        params.push(("id_token_hint", hint));
+    }
+    if let Some(redirect) = post_logout_redirect_uri {
+        params.push(("post_logout_redirect_uri", redirect));
+    }
+    let query = serde_urlencoded::to_string(&params).unwrap_or_default();
+    if query.is_empty() {
+        end_session_endpoint.to_string()
+    } else {
+        let sep = if end_session_endpoint.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        format!("{end_session_endpoint}{sep}{query}")
+    }
+}
+
+fn encrypt_bytes(key: &[u8; 32], plaintext: &[u8]) -> anyhow::Result<String> {
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), serialized.as_ref())
-        .map_err(|_| anyhow::anyhow!("failed to encrypt oidc tx"))?;
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+        .map_err(|_| anyhow::anyhow!("failed to encrypt"))?;
     let mut out = Vec::with_capacity(12 + ciphertext.len());
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
     Ok(BASE64URL.encode(out))
 }
 
-fn decrypt_tx(key: &[u8; 32], value: &str) -> anyhow::Result<OidcTx> {
+fn decrypt_bytes(key: &[u8; 32], value: &str) -> anyhow::Result<Vec<u8>> {
     let raw = BASE64URL.decode(value)?;
     if raw.len() < 12 {
-        anyhow::bail!("oidc tx cookie too short");
+        anyhow::bail!("ciphertext too short");
     }
     let (nonce_bytes, ciphertext) = raw.split_at(12);
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
-    let plaintext = cipher
+    cipher
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
-        .map_err(|_| anyhow::anyhow!("failed to decrypt oidc tx"))?;
-    Ok(serde_json::from_slice(&plaintext)?)
+        .map_err(|_| anyhow::anyhow!("failed to decrypt"))
+}
+
+fn encrypt_tx(key: &[u8; 32], tx: &OidcTx) -> anyhow::Result<String> {
+    encrypt_bytes(key, &serde_json::to_vec(tx)?)
+}
+
+fn decrypt_tx(key: &[u8; 32], value: &str) -> anyhow::Result<OidcTx> {
+    Ok(serde_json::from_slice(&decrypt_bytes(key, value)?)?)
 }
 
 fn build_tx_cookie(value: &str, max_age: u64, secure: bool) -> String {
@@ -373,6 +549,17 @@ fn build_tx_cookie(value: &str, max_age: u64, secure: bool) -> String {
 
 fn clear_tx_cookie() -> String {
     format!("{TX_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path={TX_COOKIE_PATH}; Max-Age=0")
+}
+
+fn build_id_cookie(value: &str, max_age: u64, secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{ID_COOKIE_NAME}={value}; HttpOnly; SameSite=Lax; Path={ID_COOKIE_PATH}; Max-Age={max_age}{secure_attr}"
+    )
+}
+
+fn clear_id_cookie() -> String {
+    format!("{ID_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path={ID_COOKIE_PATH}; Max-Age=0")
 }
 
 fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -388,6 +575,19 @@ fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Length-aware constant-time byte comparison. The length check can reveal a
+/// size mismatch, which is irrelevant for fixed-length CSRF tokens.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn cookie_secure(state: &AppState, headers: &HeaderMap) -> bool {
@@ -461,5 +661,44 @@ mod tests {
         };
         let encrypted = encrypt_tx(&[1u8; 32], &tx).unwrap();
         assert!(decrypt_tx(&[2u8; 32], &encrypted).is_err());
+    }
+
+    #[test]
+    fn end_session_url_includes_hint_and_redirect() {
+        let url = build_end_session_url(
+            "https://idp.example.com/logout",
+            "my-client",
+            Some("the-id-token"),
+            Some("https://app.example.com/"),
+        );
+        assert!(url.starts_with("https://idp.example.com/logout?"));
+        assert!(url.contains("client_id=my-client"));
+        assert!(url.contains("id_token_hint=the-id-token"));
+        // post_logout_redirect_uri is URL-encoded.
+        assert!(url.contains("post_logout_redirect_uri=https%3A%2F%2Fapp.example.com%2F"));
+    }
+
+    #[test]
+    fn end_session_url_without_optionals_keeps_client_id() {
+        let url = build_end_session_url("https://idp.example.com/logout", "my-client", None, None);
+        assert_eq!(url, "https://idp.example.com/logout?client_id=my-client");
+        assert!(!url.contains("id_token_hint"));
+        assert!(!url.contains("post_logout_redirect_uri"));
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_equal_inputs() {
+        assert!(constant_time_eq(b"state-abc", b"state-abc"));
+        assert!(!constant_time_eq(b"state-abc", b"state-abd"));
+        assert!(!constant_time_eq(b"state-abc", b"state-ab"));
+        assert!(!constant_time_eq(b"", b"x"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn end_session_url_appends_to_existing_query() {
+        let url = build_end_session_url("https://idp.example.com/logout?foo=bar", "c", None, None);
+        assert!(url.starts_with("https://idp.example.com/logout?foo=bar&"));
+        assert!(url.contains("client_id=c"));
     }
 }

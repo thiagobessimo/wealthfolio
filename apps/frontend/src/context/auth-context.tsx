@@ -174,8 +174,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    // Clear server-side cookie session
     if (isWeb) {
+      if (oidcEnabled) {
+        // Full-page navigation: the server clears the session (and OIDC id-token
+        // cookie) and may redirect to the IdP for single logout.
+        window.location.href = "/api/v1/auth/oidc/logout";
+        return;
+      }
+      // Clear server-side cookie session
       fetch("/api/v1/auth/logout", {
         method: "POST",
         credentials: "same-origin",
@@ -183,7 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     setCookieSession(false);
     setLoginError(null);
-  }, []);
+  }, [oidcEnabled]);
 
   const clearError = useCallback(() => setLoginError(null), []);
 

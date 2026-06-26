@@ -52,6 +52,10 @@ services:
       # Restrict access on a shared IdP (comma-separated); otherwise any IdP user is allowed.
       WF_OIDC_ALLOWED_EMAILS: "${WF_OIDC_ALLOWED_EMAILS:-}"
       # WF_OIDC_ALLOWED_SUBS: ""
+      # Logout ends the IdP session too when supported (RP-Initiated Logout). To return
+      # to the app afterward, set this AND register it in the IdP; otherwise omit it.
+      WF_OIDC_POST_LOGOUT_REDIRECT_URL: "${WF_OIDC_POST_LOGOUT_REDIRECT_URL:-}"
+      # WF_OIDC_RP_LOGOUT: "true"   # set "false" to force local-only logout
 
       # Required when auth is enabled — set to your app's origin, e.g. https://wealthfolio.example.com
       WF_CORS_ALLOW_ORIGINS: "${WF_CORS_ALLOW_ORIGINS:-}"
