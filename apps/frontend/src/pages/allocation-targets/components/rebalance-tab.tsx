@@ -987,6 +987,7 @@ function SleeveReshapeCard({ sleeves, mode }: { sleeves: SleeveSummaryRow[]; mod
 const WARN_LABEL: Record<string, string> = {
   missing_quote: "Missing quote",
   no_buy_candidate: "No buy candidate",
+  tagged_cash: "Tagged cash",
   unclassified_asset: "Unclassified",
   partial_classification: "Partial classification",
 };

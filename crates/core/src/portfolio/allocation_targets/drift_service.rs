@@ -10,7 +10,7 @@ use crate::portfolio::allocation::{AllocationServiceTrait, TaxonomyHoldingContri
 use crate::portfolio::holdings::{HoldingType, HoldingsServiceTrait};
 use crate::taxonomies::TaxonomyServiceTrait;
 
-use super::cash::{deployable_cash_from_contributions, tracked_cash};
+use super::cash::{deployable_cash_from_contributions, is_deployable_cash_category, tracked_cash};
 use super::model::{
     AllocationTarget, AllocationTargetWeight, DriftHoldingRow, DriftHoldingsReport, DriftReport,
     DriftRow, DriftStatus, ScopeType,
@@ -22,15 +22,6 @@ struct CategoryCurrent {
     value: Decimal,
     name: String,
     color: String,
-    has_cash: bool,
-    has_non_cash: bool,
-}
-
-impl CategoryCurrent {
-    /// A category that holds cash and nothing else is the cash sleeve.
-    fn is_cash(&self) -> bool {
-        self.has_cash && !self.has_non_cash
-    }
 }
 
 #[async_trait]
@@ -154,15 +145,8 @@ impl DriftService {
                     value: Decimal::ZERO,
                     name: contribution.category_name.clone(),
                     color: contribution.category_color.clone(),
-                    has_cash: false,
-                    has_non_cash: false,
                 });
             entry.value += contribution.value;
-            if contribution.holding_type == HoldingType::Cash {
-                entry.has_cash = true;
-            } else {
-                entry.has_non_cash = true;
-            }
         }
 
         current_by_category
@@ -235,7 +219,7 @@ impl DriftService {
                     status,
                     is_required: weight.is_required,
                     is_zero_current: current_value == Decimal::ZERO,
-                    is_cash: current.map(|current| current.is_cash()).unwrap_or(false),
+                    is_cash: is_deployable_cash_category(&target.taxonomy_id, &weight.category_id),
                 }
             })
             .filter(|row| row.is_required || row.current_value > Decimal::ZERO)
@@ -252,7 +236,7 @@ impl DriftService {
             }
 
             let current_bps = Self::current_bps(current.value, total_value);
-            let is_cash = current.is_cash();
+            let is_cash = is_deployable_cash_category(&target.taxonomy_id, &category_id);
             rows.push(DriftRow {
                 category_id,
                 category_name: current.name,
@@ -603,6 +587,19 @@ mod tests {
             category_name: category_id.to_string(),
             category_color: "#111111".to_string(),
             value,
+        }
+    }
+
+    fn cash_contribution(category_id: &str, value: Decimal) -> HoldingAllocationContribution {
+        HoldingAllocationContribution {
+            id: format!("cash:{category_id}:0"),
+            holding_id: "cash".to_string(),
+            asset_id: "cash".to_string(),
+            symbol: "USD".to_string(),
+            name: "Cash (USD)".to_string(),
+            holding_type: HoldingType::Cash,
+            quantity: value,
+            ..holding_contribution(category_id, value)
         }
     }
 
@@ -1344,6 +1341,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.deployable_cash, dec!(2000));
+    }
+
+    #[tokio::test]
+    async fn tagged_cash_in_non_cash_category_is_not_cash_sleeve() {
+        let svc = make_service_with_contributions(
+            base_target(500),
+            vec![weight("FIXED_INCOME", 10000), weight("CASH", 0)],
+            alloc_with(vec![], dec!(1000)),
+            TaxonomyHoldingContributions {
+                taxonomy_id: "asset_classes".to_string(),
+                taxonomy_name: "Asset Classes".to_string(),
+                total_value: dec!(1000),
+                currency: "USD".to_string(),
+                contributions: vec![cash_contribution("FIXED_INCOME", dec!(1000))],
+            },
+        );
+
+        let report = svc
+            .get_drift_report_for_target("p1", &[], "USD", "agg")
+            .await
+            .unwrap();
+
+        let fixed_income = report
+            .rows
+            .iter()
+            .find(|row| row.category_id == "FIXED_INCOME")
+            .unwrap();
+        assert!(!fixed_income.is_cash);
+
+        let cash = report
+            .rows
+            .iter()
+            .find(|row| row.category_id == "CASH")
+            .unwrap();
+        assert!(cash.is_cash);
+        assert_eq!(cash.current_value, Decimal::ZERO);
     }
 
     #[tokio::test]

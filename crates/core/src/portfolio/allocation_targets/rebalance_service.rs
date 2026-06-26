@@ -9,7 +9,10 @@ use crate::errors::{Error as CoreError, Result as CoreResult};
 use crate::portfolio::allocation::{AllocationServiceTrait, HoldingAllocationContribution};
 use crate::portfolio::holdings::{HoldingType, HoldingsServiceTrait};
 
-use super::cash::{deployable_cash_from_contributions, tracked_cash};
+use super::cash::{
+    deployable_cash_from_contributions, has_deployable_cash_categories,
+    is_deployable_cash_category, tracked_cash,
+};
 use super::drift_service::DriftServiceTrait;
 use super::model::{
     CalculateRebalancePlanInput, RebalancePlan, RebalanceWarning, RebalanceWarningKind,
@@ -87,6 +90,44 @@ impl RebalanceService {
             };
             price * fx_rate
         })
+    }
+
+    fn tagged_cash_warnings(
+        taxonomy_id: &str,
+        contributions: &[HoldingAllocationContribution],
+    ) -> Vec<RebalanceWarning> {
+        if !has_deployable_cash_categories(taxonomy_id) {
+            return vec![];
+        }
+
+        let mut value_by_category: HashMap<String, (String, Decimal)> = HashMap::new();
+        for contribution in contributions {
+            if contribution.holding_type != HoldingType::Cash
+                || is_deployable_cash_category(taxonomy_id, &contribution.category_id)
+            {
+                continue;
+            }
+
+            let entry = value_by_category
+                .entry(contribution.category_id.clone())
+                .or_insert_with(|| (contribution.category_name.clone(), Decimal::ZERO));
+            entry.1 += contribution.value;
+        }
+
+        let mut categories: Vec<_> = value_by_category.into_iter().collect();
+        categories.sort_by(|a, b| a.0.cmp(&b.0));
+
+        categories
+            .into_iter()
+            .map(|(category_id, (category_name, value))| RebalanceWarning {
+                kind: RebalanceWarningKind::TaggedCash,
+                category_id,
+                message: format!(
+                    "{} contains {:.2} of tagged cash. It is excluded from cash to deploy; move or reclassify that cash before the plan can rebalance this sleeve.",
+                    category_name, value
+                ),
+            })
+            .collect()
     }
 
     /// Build `AssetCandidate` list from holdings + contributions.
@@ -327,7 +368,7 @@ impl RebalanceServiceTrait for RebalanceService {
             } else {
                 return Err(CoreError::Validation(
                     crate::errors::ValidationError::InvalidInput(
-                        "cash to deploy exceeds tracked cash in scope".to_string(),
+                        "cash to deploy exceeds deployable cash in scope".to_string(),
                     ),
                 ));
             }
@@ -375,12 +416,16 @@ impl RebalanceServiceTrait for RebalanceService {
             .map(|h| (Self::asset_key(h), h.quantity))
             .collect();
 
-        let (candidates, classification_warnings) = Self::build_candidates(
+        let (candidates, mut classification_warnings) = Self::build_candidates(
             &taxonomy_contributions.contributions,
             &price_by_asset,
             &quantity_by_asset,
             profile.whole_shares_only,
         );
+        classification_warnings.extend(Self::tagged_cash_warnings(
+            &profile.taxonomy_id,
+            &taxonomy_contributions.contributions,
+        ));
 
         let sell_candidates = if profile.allow_sells
             && !matches!(
@@ -986,7 +1031,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.to_string().contains("exceeds tracked cash in scope"),
+            err.to_string().contains("exceeds deployable cash in scope"),
             "{err}"
         );
     }
@@ -1019,9 +1064,48 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            err.to_string().contains("exceeds tracked cash in scope"),
+            err.to_string().contains("exceeds deployable cash in scope"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn tagged_cash_in_non_cash_sleeve_emits_warning() {
+        let cash = make_cash_holding(dec!(1000), "USD");
+        let tagged_cash = make_contribution(&cash, "FIXED_INCOME", dec!(1000));
+        let svc = RebalanceService::new(
+            Arc::new(MockTargetService {
+                profile: make_sell_profile(RebalanceGoal::ExactTarget),
+            }),
+            Arc::new(MockDriftService {
+                report: make_report(
+                    vec![make_drift_row("FIXED_INCOME", 10000, 0, dec!(1000))],
+                    dec!(1000),
+                ),
+            }),
+            Arc::new(MockAllocationService {
+                contributions: make_contributions(vec![tagged_cash]),
+            }),
+            Arc::new(MockHoldingsService {
+                holdings: vec![cash],
+            }),
+        );
+
+        let plan = svc
+            .calculate_plan(make_input_with_mode(
+                Decimal::ZERO,
+                ScenarioMode::SellToRebalance,
+            ))
+            .await
+            .unwrap();
+
+        let warning = plan
+            .warnings
+            .iter()
+            .find(|warning| warning.kind == RebalanceWarningKind::TaggedCash)
+            .expect("tagged cash warning expected");
+        assert_eq!(warning.category_id, "FIXED_INCOME");
+        assert!(warning.message.contains("move or reclassify"));
     }
 
     #[tokio::test]

@@ -15,6 +15,14 @@ fn deployable_cash_category_ids(taxonomy_id: &str) -> &'static [&'static str] {
     }
 }
 
+pub(super) fn has_deployable_cash_categories(taxonomy_id: &str) -> bool {
+    !deployable_cash_category_ids(taxonomy_id).is_empty()
+}
+
+pub(super) fn is_deployable_cash_category(taxonomy_id: &str, category_id: &str) -> bool {
+    deployable_cash_category_ids(taxonomy_id).contains(&category_id)
+}
+
 pub(super) fn deployable_cash_from_contributions(
     taxonomy_id: &str,
     contributions: &TaxonomyHoldingContributions,
@@ -30,7 +38,7 @@ pub(super) fn deployable_cash_from_contributions(
             .iter()
             .filter(|c| {
                 c.holding_type == HoldingType::Cash
-                    && category_ids.contains(&c.category_id.as_str())
+                    && is_deployable_cash_category(taxonomy_id, &c.category_id)
             })
             .map(|c| c.value)
             .sum(),
@@ -106,6 +114,11 @@ mod tests {
             deployable_cash_from_contributions("asset_classes", &default_cash),
             Some(dec!(500))
         );
+        assert!(is_deployable_cash_category("asset_classes", "CASH"));
+        assert!(!is_deployable_cash_category(
+            "asset_classes",
+            "FIXED_INCOME"
+        ));
     }
 
     #[test]
