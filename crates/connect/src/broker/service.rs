@@ -19,7 +19,7 @@ use crate::platform::Platform;
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use wealthfolio_core::accounts::{
     account_types, Account, AccountServiceTrait, NewAccount, TrackingMode,
 };
@@ -1013,7 +1013,7 @@ impl BrokerSyncServiceTrait for BrokerSyncService {
                 (position.quantity * avg_cost).round_dp(HOLDINGS_DECIMAL_PRECISION);
             total_cost_basis += position_cost_basis;
 
-            let position = Position {
+            let new_position = Position {
                 id: format!("{}_{}", account_id, asset_id),
                 account_id: account_id.clone(),
                 asset_id: asset_id.clone(),
@@ -1028,7 +1028,21 @@ impl BrokerSyncServiceTrait for BrokerSyncService {
                 is_alternative: false,
                 contract_multiplier,
             };
-            positions_map.insert(asset_id, position);
+
+            // Brokers (e.g. Fidelity via SnapTrade) can report multiple position rows for the
+            // same instrument — one per lot type (margin vs. cash sub-account) or per tax lot.
+            // They all resolve to the same asset_id, so merge them into a single holding by
+            // summing quantities and cost basis and recomputing the weighted-average cost.
+            // Without this, each later row would overwrite the previous one, undercounting the
+            // position (e.g. a margin + non-margin VTI lot would show only half the shares).
+            match positions_map.entry(asset_id) {
+                Entry::Occupied(mut existing) => {
+                    Self::merge_broker_position(existing.get_mut(), new_position);
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(new_position);
+                }
+            }
         }
 
         // Calculate cash totals
@@ -1144,6 +1158,28 @@ impl BrokerSyncService {
         }
 
         Decimal::ZERO
+    }
+
+    /// Merge an additional broker-reported lot into an existing position for the same asset.
+    ///
+    /// Some brokers (notably Fidelity via SnapTrade) return one position row per lot type
+    /// (margin vs. cash sub-account) or per tax lot, all for the same instrument. Quantities and
+    /// cost basis are summed and the average cost is recomputed as a quantity-weighted average so
+    /// the merged holding reflects the full position rather than a single lot.
+    fn merge_broker_position(existing: &mut Position, incoming: Position) {
+        let combined_quantity =
+            (existing.quantity + incoming.quantity).round_dp(HOLDINGS_DECIMAL_PRECISION);
+        let combined_cost_basis = (existing.total_cost_basis + incoming.total_cost_basis)
+            .round_dp(HOLDINGS_DECIMAL_PRECISION);
+
+        existing.average_cost = if combined_quantity == Decimal::ZERO {
+            Decimal::ZERO
+        } else {
+            (combined_cost_basis / combined_quantity).round_dp(HOLDINGS_DECIMAL_PRECISION)
+        };
+        existing.quantity = combined_quantity;
+        existing.total_cost_basis = combined_cost_basis;
+        existing.last_updated = incoming.last_updated;
     }
 
     fn compute_holdings_diff(
@@ -1722,5 +1758,89 @@ mod tests {
         assert_eq!(quantity_changed, Decimal::ZERO);
         assert_eq!(currency_changed, Decimal::ZERO);
         assert_eq!(missing, Decimal::ZERO);
+    }
+
+    #[test]
+    fn merge_broker_position_sums_quantities_and_weights_average_cost() {
+        // Two lots of the same instrument: 30 @ 100 and 10 @ 200.
+        let mut existing = position("acc-1", "vti", "30", "100", "3000", "USD");
+        let incoming = position("acc-1", "vti", "10", "200", "2000", "USD");
+
+        BrokerSyncService::merge_broker_position(&mut existing, incoming);
+
+        assert_eq!(existing.quantity, decimal("40"));
+        assert_eq!(existing.total_cost_basis, decimal("5000"));
+        // Quantity-weighted average: 5000 / 40 = 125.
+        assert_eq!(existing.average_cost, decimal("125"));
+    }
+
+    #[test]
+    fn merge_broker_position_matches_fidelity_combined_share_count() {
+        // Reproduces the reported Fidelity-via-SnapTrade bug: VTI is returned as two lots
+        // (a margin lot and a non-margin lot) that both resolve to the same asset_id.
+        // Before the fix the second lot overwrote the first, halving the share count.
+        let margin_basis = (decimal("32.005") * decimal("324.2431")).round_dp(12);
+        let non_margin_basis = (decimal("18.423") * decimal("362.4893")).round_dp(12);
+
+        let mut margin_lot = position(
+            "acc-1",
+            "vti",
+            "32.005",
+            "324.2431",
+            &margin_basis.to_string(),
+            "USD",
+        );
+        let non_margin_lot = position(
+            "acc-1",
+            "vti",
+            "18.423",
+            "362.4893",
+            &non_margin_basis.to_string(),
+            "USD",
+        );
+
+        BrokerSyncService::merge_broker_position(&mut margin_lot, non_margin_lot);
+
+        // Fidelity's combined total for VTI is 50.428 shares.
+        assert_eq!(margin_lot.quantity, decimal("50.428"));
+
+        let combined_basis = (margin_basis + non_margin_basis).round_dp(12);
+        assert_eq!(margin_lot.total_cost_basis, combined_basis);
+        assert_eq!(
+            margin_lot.average_cost,
+            (combined_basis / decimal("50.428")).round_dp(12)
+        );
+    }
+
+    #[test]
+    fn merge_broker_position_handles_offsetting_quantities_without_dividing_by_zero() {
+        // A net-flat instrument (e.g. a long lot fully offset by a short lot) must not panic.
+        let mut existing = position("acc-1", "vti", "10", "100", "1000", "USD");
+        let incoming = position("acc-1", "vti", "-10", "100", "-1000", "USD");
+
+        BrokerSyncService::merge_broker_position(&mut existing, incoming);
+
+        assert_eq!(existing.quantity, Decimal::ZERO);
+        assert_eq!(existing.total_cost_basis, Decimal::ZERO);
+        assert_eq!(existing.average_cost, Decimal::ZERO);
+    }
+
+    #[test]
+    fn merge_broker_position_is_order_independent() {
+        let mut a_then_b = position("acc-1", "vti", "30", "100", "3000", "USD");
+        BrokerSyncService::merge_broker_position(
+            &mut a_then_b,
+            position("acc-1", "vti", "10", "200", "2000", "USD"),
+        );
+
+        let mut b_then_a = position("acc-1", "vti", "10", "200", "2000", "USD");
+        BrokerSyncService::merge_broker_position(
+            &mut b_then_a,
+            position("acc-1", "vti", "30", "100", "3000", "USD"),
+        );
+
+        assert_eq!(a_then_b.quantity, b_then_a.quantity);
+        assert_eq!(a_then_b.total_cost_basis, b_then_a.total_cost_basis);
+        assert_eq!(a_then_b.average_cost, b_then_a.average_cost);
     }
 }
