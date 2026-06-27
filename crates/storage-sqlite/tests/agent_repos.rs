@@ -4,7 +4,7 @@
 
 use tempfile::tempdir;
 use wealthfolio_storage_sqlite::agent::{
-    McpAuditRepository, NewMcpAuditLogDB, NewPersonalAccessToken, PatRepository,
+    AuditFilter, McpAuditRepository, NewMcpAuditLogDB, NewPersonalAccessToken, PatRepository,
 };
 use wealthfolio_storage_sqlite::db;
 
@@ -26,13 +26,13 @@ fn new_token(name: &str, prefix: &str, hash: &str) -> NewPersonalAccessToken {
         name: name.to_string(),
         token_prefix: prefix.to_string(),
         token_hash: hash.to_string(),
-        scopes_json: r#"["accounts:read","portfolio:read"]"#.to_string(),
+        scopes_json: r#"["accounts:read","holdings:read"]"#.to_string(),
         expires_at: None,
     }
 }
 
 #[tokio::test]
-async fn pat_create_list_find_revoke_touch() {
+async fn pat_create_list_find_delete_touch() {
     let (_dir, pool, writer) = setup();
     let repo = PatRepository::new(pool, writer);
 
@@ -59,10 +59,10 @@ async fn pat_create_list_find_revoke_touch() {
     let touched = repo.find_by_prefix("abc123def456").unwrap();
     assert!(touched[0].last_used_at.is_some());
 
-    assert!(repo.revoke(&created.id).await.unwrap());
-    assert!(!repo.revoke("missing-id").await.unwrap());
-    let revoked = repo.find_by_prefix("abc123def456").unwrap();
-    assert!(revoked[0].revoked_at.is_some());
+    // delete() hard-removes the row (cuts off access immediately).
+    assert!(repo.delete(&created.id).await.unwrap());
+    assert!(!repo.delete("missing-id").await.unwrap());
+    assert!(repo.find_by_prefix("abc123def456").unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -80,7 +80,7 @@ async fn duplicate_token_hash_is_rejected() {
 fn audit_entry(tool: &str, outcome: &str) -> NewMcpAuditLogDB {
     NewMcpAuditLogDB {
         session_id: "sess-1".to_string(),
-        actor_kind: "local_token".to_string(),
+        actor_kind: "pat".to_string(),
         actor_fingerprint: "sha256:test".to_string(),
         tool: tool.to_string(),
         scopes_json: r#"["accounts:read"]"#.to_string(),
@@ -105,20 +105,30 @@ async fn audit_insert_page_filter_purge() {
         .await
         .unwrap();
 
-    let (rows, total) = repo.list_paged(1, 10, None).unwrap();
+    let (rows, total) = repo.list_paged(1, 10, &AuditFilter::default()).unwrap();
     assert_eq!(total, 3);
     assert_eq!(rows.len(), 3);
 
-    let (filtered, filtered_total) = repo.list_paged(1, 10, Some("get_holdings")).unwrap();
+    let only_holdings = vec!["get_holdings".to_string()];
+    let (filtered, filtered_total) = repo
+        .list_paged(
+            1,
+            10,
+            &AuditFilter {
+                tools: &only_holdings,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert_eq!(filtered_total, 2);
     assert!(filtered.iter().all(|r| r.tool == "get_holdings"));
 
-    let (page2, _) = repo.list_paged(2, 2, None).unwrap();
+    let (page2, _) = repo.list_paged(2, 2, &AuditFilter::default()).unwrap();
     assert_eq!(page2.len(), 1);
 
     let purged = repo.purge_all().await.unwrap();
     assert_eq!(purged, 3);
-    let (after, total_after) = repo.list_paged(1, 10, None).unwrap();
+    let (after, total_after) = repo.list_paged(1, 10, &AuditFilter::default()).unwrap();
     assert!(after.is_empty());
     assert_eq!(total_after, 0);
 }

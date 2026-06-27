@@ -465,6 +465,29 @@ impl AgentTool for CommitActivityImport {
     }
 }
 
+/// JSON schema for one mapped CSV row (shared by prepare/commit).
+fn activity_row_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "date": { "type": "string", "description": "Activity date (ISO or common format)." },
+            "activityType": { "type": "string", "description": "e.g. BUY, SELL, DEPOSIT, DIVIDEND." },
+            "currency": { "type": "string" },
+            "symbol": { "type": "string", "description": "Ticker; omit for pure cash activities." },
+            "symbolName": { "type": "string" },
+            "quantity": { "type": "number" },
+            "unitPrice": { "type": "number" },
+            "amount": { "type": "number" },
+            "fee": { "type": "number" },
+            "accountId": { "type": "string" },
+            "comment": { "type": "string" },
+            "lineNumber": { "type": "integer", "description": "1-based source row, for duplicate messages." },
+            "forceImport": { "type": "boolean", "description": "Import despite a detected duplicate." }
+        },
+        "required": ["date", "activityType", "currency"]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,27 +550,4 @@ mod tests {
         let redacted = redact_activities(&args);
         assert_eq!(redacted["activities"], json!("[3 rows]"));
     }
-}
-
-/// JSON schema for one mapped CSV row (shared by prepare/commit).
-fn activity_row_schema() -> serde_json::Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "date": { "type": "string", "description": "Activity date (ISO or common format)." },
-            "activityType": { "type": "string", "description": "e.g. BUY, SELL, DEPOSIT, DIVIDEND." },
-            "currency": { "type": "string" },
-            "symbol": { "type": "string", "description": "Ticker; omit for pure cash activities." },
-            "symbolName": { "type": "string" },
-            "quantity": { "type": "number" },
-            "unitPrice": { "type": "number" },
-            "amount": { "type": "number" },
-            "fee": { "type": "number" },
-            "accountId": { "type": "string" },
-            "comment": { "type": "string" },
-            "lineNumber": { "type": "integer", "description": "1-based source row, for duplicate messages." },
-            "forceImport": { "type": "boolean", "description": "Import despite a detected duplicate." }
-        },
-        "required": ["date", "activityType", "currency"]
-    })
 }

@@ -330,6 +330,35 @@ impl AgentTool for CommitActivityDrafts {
     }
 }
 
+/// JSON schema for an [`ActivityDraft`] commit input — the shape
+/// `record_activity` returns under `draft`.
+fn activity_draft_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "activityType": { "type": "string" },
+            "activityDate": { "type": "string", "description": "ISO 8601 date." },
+            "symbol": { "type": "string" },
+            "assetId": { "type": "string" },
+            "assetName": { "type": "string" },
+            "quantity": { "type": "number" },
+            "unitPrice": { "type": "number" },
+            "amount": { "type": "number" },
+            "fee": { "type": "number" },
+            "currency": { "type": "string" },
+            "accountId": { "type": "string" },
+            "accountName": { "type": "string" },
+            "subtype": { "type": "string" },
+            "notes": { "type": "string" },
+            "priceSource": { "type": "string" },
+            "pricingMode": { "type": "string" },
+            "isCustomAsset": { "type": "boolean" },
+            "assetKind": { "type": "string" }
+        },
+        "required": ["activityType", "activityDate", "currency", "accountId"]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,33 +467,4 @@ mod tests {
             serde_json::json!("[2 drafts]")
         );
     }
-}
-
-/// JSON schema for an [`ActivityDraft`] commit input — the shape
-/// `record_activity` returns under `draft`.
-fn activity_draft_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "activityType": { "type": "string" },
-            "activityDate": { "type": "string", "description": "ISO 8601 date." },
-            "symbol": { "type": "string" },
-            "assetId": { "type": "string" },
-            "assetName": { "type": "string" },
-            "quantity": { "type": "number" },
-            "unitPrice": { "type": "number" },
-            "amount": { "type": "number" },
-            "fee": { "type": "number" },
-            "currency": { "type": "string" },
-            "accountId": { "type": "string" },
-            "accountName": { "type": "string" },
-            "subtype": { "type": "string" },
-            "notes": { "type": "string" },
-            "priceSource": { "type": "string" },
-            "pricingMode": { "type": "string" },
-            "isCustomAsset": { "type": "boolean" },
-            "assetKind": { "type": "string" }
-        },
-        "required": ["activityType", "activityDate", "currency", "accountId"]
-    })
 }
