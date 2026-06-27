@@ -20,7 +20,7 @@ use wealthfolio_storage_sqlite::agent::PatRepository;
 /// Token (`wfp_`) — granted exactly its persisted scopes. Anything else
 /// is `401`. On success the matching [`McpAuthContext`] is injected for
 /// the MCP handler.
-pub async fn require_local_bearer(
+pub async fn require_pat(
     State(pat_repository): State<Arc<PatRepository>>,
     mut req: Request<Body>,
     next: Next,

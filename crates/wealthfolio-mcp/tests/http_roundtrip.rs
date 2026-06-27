@@ -179,7 +179,7 @@ impl AuditSink for CapturingSink {
 
 async fn inject_auth(mut req: Request<Body>, next: Next) -> Response {
     req.extensions_mut().insert(McpAuthContext {
-        actor_kind: ActorKind::LocalToken,
+        actor_kind: ActorKind::Pat,
         actor_fingerprint: "sha256:test".to_string(),
         granted_scopes: AgentScopeSet::from_strs(["accounts:read"]),
     });

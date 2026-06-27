@@ -17,7 +17,7 @@ use wealthfolio_agent_tools::AgentEnvironment;
 use wealthfolio_mcp::{AuditSink, McpServerBuilder};
 use wealthfolio_storage_sqlite::agent::PatRepository;
 
-use super::middleware::{require_local_bearer, validate_origin};
+use super::middleware::{require_pat, validate_origin};
 
 /// Fixed default port; falls back to a random port when already in use.
 pub const DEFAULT_PORT: u16 = 8639;
@@ -71,10 +71,7 @@ pub fn build_router(
 
     let protected = Router::new()
         .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(
-            pat_repository,
-            require_local_bearer,
-        ))
+        .layer(middleware::from_fn_with_state(pat_repository, require_pat))
         .layer(middleware::from_fn(validate_origin));
 
     Router::new().route("/health", get(health)).merge(protected)

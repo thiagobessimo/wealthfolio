@@ -39,20 +39,12 @@ const PAGE_SIZE = 25;
 
 const ACTOR_LABEL: Record<string, string> = {
   pat: "Token",
-  local_token: "Local token",
-  desktop_bridge: "CLI bridge",
 };
 
 const OUTCOME_OPTIONS = [
   { label: "Success", value: "success" },
   { label: "Denied", value: "denied" },
   { label: "Error", value: "error" },
-];
-
-const ACTOR_OPTIONS = [
-  { label: "Token", value: "pat" },
-  { label: "Local token", value: "local_token" },
-  { label: "CLI bridge", value: "desktop_bridge" },
 ];
 
 function outcomeVariant(outcome: string): "success" | "warning" | "destructive" | "secondary" {
@@ -73,7 +65,6 @@ export function AuditLogTable({ disabledNotice }: { disabledNotice?: string }) {
   const [search, setSearch] = useState("");
   const [tools, setTools] = useState<Set<string>>(new Set());
   const [outcomes, setOutcomes] = useState<Set<string>>(new Set());
-  const [actorKinds, setActorKinds] = useState<Set<string>>(new Set());
   const [purgeOpen, setPurgeOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -84,7 +75,6 @@ export function AuditLogTable({ disabledNotice }: { disabledNotice?: string }) {
     q: debouncedSearch.trim() || undefined,
     tools: Array.from(tools),
     outcomes: Array.from(outcomes),
-    actorKinds: Array.from(actorKinds),
   });
 
   const { tokens } = useAccessTokens();
@@ -99,8 +89,7 @@ export function AuditLogTable({ disabledNotice }: { disabledNotice?: string }) {
   );
 
   const pageCount = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-  const hasFilters =
-    debouncedSearch.trim().length > 0 || tools.size > 0 || outcomes.size > 0 || actorKinds.size > 0;
+  const hasFilters = debouncedSearch.trim().length > 0 || tools.size > 0 || outcomes.size > 0;
   // `availableTools` spans the whole log regardless of the active filter.
   const logHasData = availableTools.length > 0;
 
@@ -160,12 +149,6 @@ export function AuditLogTable({ disabledNotice }: { disabledNotice?: string }) {
               selectedValues={outcomes}
               onFilterChange={(value) => onFilter(setOutcomes, value)}
             />
-            <FacetedFilter
-              title="Actor"
-              options={ACTOR_OPTIONS}
-              selectedValues={actorKinds}
-              onFilterChange={(value) => onFilter(setActorKinds, value)}
-            />
             {hasFilters && (
               <Button
                 variant="ghost"
@@ -175,7 +158,6 @@ export function AuditLogTable({ disabledNotice }: { disabledNotice?: string }) {
                   setSearch("");
                   setTools(new Set());
                   setOutcomes(new Set());
-                  setActorKinds(new Set());
                   setPage(1);
                 }}
               >

@@ -71,21 +71,9 @@ impl AgentScope {
 
     /// Parse the canonical wire format. Unknown scopes return `None`;
     /// callers decide whether unknown means "ignore" (forward compat for
-    /// tokens minted by a newer version) or "reject". This is the strict
-    /// parser used for token-creation validation — it does NOT accept the
-    /// retired `portfolio:read` alias (see [`AgentScope::parse_lenient`]).
+    /// tokens minted by a newer version) or "reject".
     pub fn parse(s: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|scope| scope.as_str() == s)
-    }
-
-    /// Like [`AgentScope::parse`] but also maps the retired `portfolio:read`
-    /// scope to [`AgentScope::HoldingsRead`]. Used on the auth path so tokens
-    /// minted before the rename keep their holdings/value access.
-    pub fn parse_lenient(s: &str) -> Option<Self> {
-        match s {
-            "portfolio:read" => Some(AgentScope::HoldingsRead),
-            other => Self::parse(other),
-        }
     }
 }
 
@@ -146,16 +134,10 @@ impl AgentScopeSet {
     }
 
     /// Build from canonical scope strings, silently skipping unknown ones
-    /// (forward compatibility with scopes minted by newer versions) and
-    /// mapping the retired `portfolio:read` alias to `holdings:read`. Use
-    /// this on the auth path.
+    /// (forward compatibility with scopes minted by a newer version). Used on
+    /// the auth path.
     pub fn from_strs<'a>(scopes: impl IntoIterator<Item = &'a str>) -> Self {
-        Self(
-            scopes
-                .into_iter()
-                .filter_map(AgentScope::parse_lenient)
-                .collect(),
-        )
+        Self(scopes.into_iter().filter_map(AgentScope::parse).collect())
     }
 
     pub fn insert(&mut self, scope: AgentScope) {
@@ -212,28 +194,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_unknown_and_legacy_alias() {
+    fn parse_rejects_unknown() {
         assert_eq!(AgentScope::parse("accounts:write"), None);
         assert_eq!(AgentScope::parse(""), None);
-        // The strict parser (token creation) does not accept the retired alias.
-        assert_eq!(AgentScope::parse("portfolio:read"), None);
     }
 
     #[test]
-    fn parse_lenient_maps_legacy_portfolio_read() {
-        assert_eq!(
-            AgentScope::parse_lenient("portfolio:read"),
-            Some(AgentScope::HoldingsRead)
-        );
-        assert_eq!(
-            AgentScope::parse_lenient("holdings:read"),
-            Some(AgentScope::HoldingsRead)
-        );
-    }
-
-    #[test]
-    fn from_strs_skips_unknown_and_applies_legacy_alias() {
-        let set = AgentScopeSet::from_strs(["accounts:read", "not-a-scope", "portfolio:read"]);
+    fn from_strs_skips_unknown() {
+        let set = AgentScopeSet::from_strs(["accounts:read", "not-a-scope", "holdings:read"]);
         assert!(set.contains(AgentScope::AccountsRead));
         assert!(set.contains(AgentScope::HoldingsRead));
         assert!(!set.contains(AgentScope::PerformanceRead));

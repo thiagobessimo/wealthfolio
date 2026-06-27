@@ -9,11 +9,13 @@
 use wealthfolio_agent_tools::AgentScopeSet;
 
 /// Who is calling: which credential kind authenticated this session.
+///
+/// Both runtimes (desktop loopback HTTP and the web server) authenticate with
+/// Personal Access Tokens, so `Pat` is currently the only kind. Kept as an
+/// enum so the audit log can distinguish future credential kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorKind {
-    /// Desktop local token (loopback HTTP).
-    LocalToken,
-    /// Personal Access Token (web server).
+    /// Personal Access Token.
     Pat,
 }
 
@@ -21,7 +23,6 @@ impl ActorKind {
     /// Stable string used in audit rows.
     pub fn as_str(&self) -> &'static str {
         match self {
-            ActorKind::LocalToken => "local_token",
             ActorKind::Pat => "pat",
         }
     }
