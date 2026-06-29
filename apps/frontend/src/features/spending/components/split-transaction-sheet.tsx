@@ -12,6 +12,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@wealthfolio/ui";
+import { useIsMobileViewport } from "@/hooks/use-platform";
 import type { TaxonomyCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +90,7 @@ export function SplitTransactionSheet({
   onSave,
   onClear,
 }: SplitTransactionSheetProps) {
+  const isMobile = useIsMobileViewport();
   const activity = row?.activity ?? null;
   const taxonomyId = taxonomyForBucket(activity?.cashFlowBucket);
   const totalCents = toCents(activity?.amount);
@@ -203,15 +205,26 @@ export function SplitTransactionSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col overflow-hidden sm:max-w-xl">
-        <SheetHeader>
+      <SheetContent
+        side={isMobile ? "bottom" : "right"}
+        className={cn(
+          "flex w-full flex-col overflow-hidden",
+          isMobile ? "rounded-t-4xl mx-1 h-[90vh] gap-0 p-0" : "sm:max-w-xl",
+        )}
+      >
+        <SheetHeader className={cn(isMobile && "border-border border-b px-6 py-4 text-left")}>
           <SheetTitle>Split Transaction</SheetTitle>
           <SheetDescription>
             {activity?.notes ?? "Transaction"} · {activity?.currency ?? ""}
           </SheetDescription>
         </SheetHeader>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-4">
+        <div
+          className={cn(
+            "min-h-0 flex-1 space-y-4 overflow-y-auto py-4",
+            isMobile ? "px-4" : "px-1",
+          )}
+        >
           <div className="border-border/70 bg-muted/30 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
             <span className="text-muted-foreground">Remaining</span>
             <span
@@ -312,30 +325,70 @@ export function SplitTransactionSheet({
           </div>
         </div>
 
-        <SheetFooter className="gap-2 border-t pt-4">
-          {hasExistingSplits && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleClear}
-              disabled={isSaving}
-              className="mr-auto"
-            >
-              Clear split
-            </Button>
+        <SheetFooter
+          className={cn(
+            "border-t",
+            isMobile
+              ? "border-border px-4 py-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]"
+              : "gap-2 pt-4",
           )}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isSaving}
-          >
-            Cancel
-          </Button>
-          <Button type="button" onClick={handleSave} disabled={!canSave || isSaving}>
-            {isSaving && <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />}
-            Save
-          </Button>
+        >
+          {isMobile ? (
+            <div className="flex w-full flex-col gap-2">
+              <Button type="button" onClick={handleSave} disabled={!canSave || isSaving}>
+                {isSaving && <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+              <div className="flex gap-2">
+                {hasExistingSplits && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleClear}
+                    disabled={isSaving}
+                    className="flex-1"
+                  >
+                    Clear split
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={isSaving}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {hasExistingSplits && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleClear}
+                  disabled={isSaving}
+                  className="mr-auto"
+                >
+                  Clear split
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={isSaving}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={handleSave} disabled={!canSave || isSaving}>
+                {isSaving && <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />}
+                Save
+              </Button>
+            </>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>
