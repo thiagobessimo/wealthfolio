@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { useSearchParams } from "react-router-dom";
 import type { DateRange } from "react-day-picker";
 
-import { createActivity, deleteActivity } from "@/adapters";
+import { createActivity, deleteActivity, updateActivity } from "@/adapters";
 import { generateId } from "@/lib/id";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useIsMobileViewport } from "@/hooks/use-platform";
@@ -45,6 +45,7 @@ import type { AmountRange } from "./amount-range-filter";
 import { DeleteTransactionsDialog, type DeletePreview } from "./delete-transactions-dialog";
 import { TransactionCard } from "./transaction-card";
 import { TransactionRow } from "./transaction-row";
+import { SplitTransactionSheet } from "./split-transaction-sheet";
 import { TransactionsBulkBar } from "./transactions-bulk-bar";
 import { TransactionsFilterBar, type FilterOption } from "./transactions-filter-bar";
 import type { QuickCategorizeScope } from "./quick-categorize-popover";
@@ -66,13 +67,19 @@ import { useCashActivitySearch } from "../hooks/use-cash-activity-search";
 import {
   useAssignActivityCategory,
   useBulkAssignCategories,
+  useClearActivitySplits,
+  useReplaceActivitySplits,
   useSetActivityEvent,
   useUnassignActivityCategory,
 } from "../hooks/use-cash-activities";
 import { useEventTypes, useSpendingEvents } from "../hooks/use-spending-events";
 import { useSpendingSettings } from "../hooks/use-spending-settings";
 import { invalidateSpendingCaches } from "../lib/invalidation";
-import type { CashActivitySearchRequest, CashActivityStatusFilter } from "../types/cash-activity";
+import type {
+  CashActivitySearchRequest,
+  CashActivityStatusFilter,
+  NewActivitySplit,
+} from "../types/cash-activity";
 
 const SPENDING_TAXONOMY = "spending_categories";
 const INCOME_TAXONOMY = "income_sources";
@@ -196,6 +203,7 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
     const applyingUrlParamsRef = useRef(false);
 
     const [editingActivity, setEditingActivity] = useState<TransactionRowVM | undefined>();
+    const [splittingActivity, setSplittingActivity] = useState<TransactionRowVM | null>(null);
     const [showForm, setShowForm] = useState(false);
     const [showTransferForm, setShowTransferForm] = useState(false);
     const [transferFormActivity, setTransferFormActivity] = useState<
@@ -390,6 +398,8 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
     const assignMutation = useAssignActivityCategory();
     const bulkAssignMutation = useBulkAssignCategories();
     const unassignMutation = useUnassignActivityCategory();
+    const replaceSplitsMutation = useReplaceActivitySplits();
+    const clearSplitsMutation = useClearActivitySplits();
     const setEventMutation = useSetActivityEvent();
 
     const allCategories = useMemo(() => {
@@ -558,6 +568,42 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
       [duplicateMutation],
     );
 
+    const markReimbursementMutation = useMutation({
+      mutationFn: async (row: TransactionRowVM) => {
+        const a = row.activity;
+        return updateActivity({
+          id: a.id,
+          accountId: a.accountId,
+          activityType: "CREDIT",
+          subtype: "REIMBURSEMENT",
+          activityDate: a.activityDate,
+          amount: Math.abs(Number.parseFloat(a.amount ?? "0")),
+          currency: a.currency,
+          comment: a.notes ?? null,
+        });
+      },
+      onSuccess: (_, row) => {
+        invalidateSpendingCaches(qc);
+        qc.invalidateQueries({ queryKey: [QueryKeys.ACTIVITIES] });
+        qc.invalidateQueries({ queryKey: [QueryKeys.ACTIVITY_DATA] });
+        const updatedRow: TransactionRowVM = {
+          ...row,
+          activity: {
+            ...row.activity,
+            activityType: "CREDIT",
+            subtype: "REIMBURSEMENT",
+            cashFlowBucket: "spending",
+          },
+          category: null,
+          splitCount: 0,
+        };
+        setEditingActivity(updatedRow);
+        setShowForm(true);
+        toast.success("Marked as reimbursement.");
+      },
+      onError: () => toast.error("Failed to mark reimbursement."),
+    });
+
     const deleteMutation = useMutation({
       mutationFn: async (ids: string[]) => {
         const results = await Promise.allSettled(ids.map((id) => deleteActivity(id)));
@@ -630,6 +676,20 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
         setEventMutation.mutate({ activityId, eventId });
       },
       [setEventMutation],
+    );
+    const handleSaveSplits = useCallback(
+      async (activityId: string, splits: NewActivitySplit[]) => {
+        await replaceSplitsMutation.mutateAsync({ activityId, splits });
+        toast.success("Split saved.");
+      },
+      [replaceSplitsMutation],
+    );
+    const handleClearSplits = useCallback(
+      async (activityId: string) => {
+        await clearSplitsMutation.mutateAsync({ activityId });
+        toast.success("Split cleared.");
+      },
+      [clearSplitsMutation],
     );
 
     const handleEditRow = useCallback(
@@ -788,6 +848,8 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
             onAssignCategory={handleAssignCategory}
             onClearCategory={handleClearCategory}
             onSetEvent={handleSetEvent}
+            onMarkReimbursement={(row) => markReimbursementMutation.mutate(row)}
+            onEditSplits={setSplittingActivity}
             onEdit={handleEditRow}
             onDuplicate={handleDuplicate}
             onDelete={handleDeleteRow}
@@ -959,6 +1021,18 @@ export const SpendingTransactionsTab = forwardRef<SpendingTransactionsTabHandle>
           onOpenChange={setShowForm}
           activity={editingActivityForForm}
           onTransferClick={handleTransferClick}
+        />
+
+        <SplitTransactionSheet
+          open={!!splittingActivity}
+          row={splittingActivity}
+          categories={allCategories}
+          isSaving={replaceSplitsMutation.isPending || clearSplitsMutation.isPending}
+          onOpenChange={(open) => {
+            if (!open) setSplittingActivity(null);
+          }}
+          onSave={handleSaveSplits}
+          onClear={handleClearSplits}
         />
 
         {showTransferForm &&

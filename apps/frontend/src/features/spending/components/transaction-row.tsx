@@ -18,7 +18,11 @@ import { cn, formatDate } from "@/lib/utils";
 
 import { QuickCategorizePopover } from "./quick-categorize-popover";
 import { QuickEventPopover } from "./quick-event-popover";
-import { getCashActivityLabel, getEffectiveCashActivityType } from "../lib/constants";
+import {
+  getCashActivityLabel,
+  getEffectiveCashActivityType,
+  isCreditCardAccountType,
+} from "../lib/constants";
 import {
   getTransactionDisplay,
   getTransferLinkStatus,
@@ -36,6 +40,8 @@ interface TransactionRowProps {
   onAssignCategory: (activityId: string, taxonomyId: string, categoryId: string) => void;
   onClearCategory: (activityId: string, taxonomyId: string) => void;
   onSetEvent: (activityId: string, eventId: string | null) => void;
+  onMarkReimbursement: (row: TransactionRowVM) => void;
+  onEditSplits: (row: TransactionRowVM) => void;
   onEdit: (row: TransactionRowVM) => void;
   onDuplicate: (row: TransactionRowVM) => void;
   onDelete: (row: TransactionRowVM) => void;
@@ -53,6 +59,8 @@ function TransactionRowImpl({
   onAssignCategory,
   onClearCategory,
   onSetEvent,
+  onMarkReimbursement,
+  onEditSplits,
   onEdit,
   onDuplicate,
   onDelete,
@@ -69,6 +77,8 @@ function TransactionRowImpl({
   const activityType = getEffectiveCashActivityType(a);
   const isTransfer = isTransferCashActivity(a);
   const transferLinkStatus = getTransferLinkStatus(a);
+  const canMarkReimbursement =
+    isIncome && !isCreditCardAccountType(account?.accountType) && activityType !== "CREDIT";
 
   return (
     <TableRow
@@ -87,7 +97,7 @@ function TransactionRowImpl({
       </TableCell>
       <TableCell className="hidden md:table-cell">
         <Badge variant="outline" className="text-xs">
-          {getCashActivityLabel(activityType, account?.accountType)}
+          {getCashActivityLabel(activityType, account?.accountType, a.subtype)}
         </Badge>
       </TableCell>
       <TableCell className="hidden text-sm lg:table-cell">
@@ -112,6 +122,15 @@ function TransactionRowImpl({
       <TableCell className="hidden md:table-cell">
         {isNeutral ? (
           <span className="text-muted-foreground text-xs">Neutral</span>
+        ) : row.splitCount > 0 ? (
+          <button
+            type="button"
+            className="hover:bg-muted/60 -mx-1 inline-flex max-w-[180px] items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors"
+            onClick={() => onEditSplits(row)}
+          >
+            <Icons.Split className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate text-sm">Split · {row.splitCount} lines</span>
+          </button>
         ) : (
           <QuickCategorizePopover
             scope={isIncome ? "income" : isSaving ? "saving" : "expense"}
@@ -207,6 +226,18 @@ function TransactionRowImpl({
               <Icons.Pencil className="mr-2 h-4 w-4" aria-hidden="true" />
               Edit
             </DropdownMenuItem>
+            {canMarkReimbursement && (
+              <DropdownMenuItem onClick={() => onMarkReimbursement(row)}>
+                <Icons.RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+                Mark as reimbursement
+              </DropdownMenuItem>
+            )}
+            {!isNeutral && (
+              <DropdownMenuItem onClick={() => onEditSplits(row)}>
+                <Icons.Split className="mr-2 h-4 w-4" aria-hidden="true" />
+                Split transaction
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={() => onDuplicate(row)}>
               <Icons.Copy className="mr-2 h-4 w-4" aria-hidden="true" />
               Duplicate
