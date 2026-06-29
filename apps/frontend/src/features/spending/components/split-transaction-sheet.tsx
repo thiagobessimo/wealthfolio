@@ -16,7 +16,13 @@ import type { TaxonomyCategory } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { QuickCategorizePopover, type QuickCategorizeScope } from "./quick-categorize-popover";
-import { centsToAmount, distributeRemainingCents, toCents } from "../lib/split-utils";
+import {
+  canDistributeSplitCents,
+  centsToAmount,
+  distributeEvenlyCents,
+  distributeRemainingCents,
+  toCents,
+} from "../lib/split-utils";
 import type { TransactionRowVM } from "../lib/transactions-helpers";
 import type { NewActivitySplit } from "../types/cash-activity";
 
@@ -119,7 +125,8 @@ export function SplitTransactionSheet({
     () => lines.reduce((sum, line) => sum + toCents(line.amount), 0),
     [lines],
   );
-  const remainingCents = Math.abs(totalCents) - assignedCents;
+  const totalAbsCents = Math.abs(totalCents);
+  const remainingCents = totalAbsCents - assignedCents;
   const emptyAmountIndexes = lines
     .map((line, index) => ({ line, index }))
     .filter(({ line }) => toCents(line.amount) <= 0)
@@ -127,7 +134,12 @@ export function SplitTransactionSheet({
   const hasInvalidLine = lines.some((line) => !line.categoryId || toCents(line.amount) <= 0);
   const canSave =
     !!activity && !!taxonomyId && lines.length > 0 && !hasInvalidLine && remainingCents === 0;
-  const canDistribute = emptyAmountIndexes.length > 0 && remainingCents > 0;
+  const canDistribute = canDistributeSplitCents(
+    totalAbsCents,
+    assignedCents,
+    emptyAmountIndexes.length,
+    lines.length,
+  );
   const hasExistingSplits = (row?.splitCount ?? 0) > 0;
 
   const updateLine = (id: string, patch: Partial<SplitLineState>) => {
@@ -147,16 +159,24 @@ export function SplitTransactionSheet({
 
   const handleDistribute = () => {
     if (!canDistribute) return;
-    const amounts = distributeRemainingCents(
-      Math.abs(totalCents),
-      assignedCents,
-      emptyAmountIndexes.length,
-    );
+    if (remainingCents > 0) {
+      const amounts = distributeRemainingCents(
+        totalAbsCents,
+        assignedCents,
+        emptyAmountIndexes.length,
+      );
+      setLines((current) =>
+        current.map((line, index) => {
+          const emptyIndex = emptyAmountIndexes.indexOf(index);
+          return emptyIndex >= 0 ? { ...line, amount: centsToAmount(amounts[emptyIndex]) } : line;
+        }),
+      );
+      return;
+    }
+
+    const amounts = distributeEvenlyCents(totalAbsCents, lines.length);
     setLines((current) =>
-      current.map((line, index) => {
-        const emptyIndex = emptyAmountIndexes.indexOf(index);
-        return emptyIndex >= 0 ? { ...line, amount: centsToAmount(amounts[emptyIndex]) } : line;
-      }),
+      current.map((line, index) => ({ ...line, amount: centsToAmount(amounts[index]) })),
     );
   };
 
