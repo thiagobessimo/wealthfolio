@@ -256,6 +256,7 @@ describe("InterestForm", () => {
       expect(screen.getByTestId("select-accountId")).toBeInTheDocument();
       expect(screen.getByTestId("date-picker-activityDate")).toBeInTheDocument();
       expect(screen.getByTestId("input-amount")).toBeInTheDocument();
+      expect(screen.getByTestId("input-tax")).toBeInTheDocument();
       expect(screen.getByTestId("textarea-comment")).toBeInTheDocument();
     });
 

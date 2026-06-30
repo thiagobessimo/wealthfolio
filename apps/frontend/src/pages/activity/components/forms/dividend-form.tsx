@@ -40,6 +40,12 @@ export const dividendFormSchema = z
         invalid_type_error: "Amount must be a number.",
       })
       .positive({ message: "Amount must be greater than 0." }),
+    tax: z.coerce
+      .number({
+        invalid_type_error: "Withholding tax must be a number.",
+      })
+      .min(0, { message: "Withholding tax must be non-negative." })
+      .default(0),
     comment: z.string().optional().nullable(),
     // Advanced options
     currency: z.string().min(1, { message: "Currency is required." }),
@@ -131,6 +137,7 @@ export function DividendForm({
       symbol: "",
       activityDate: new Date(),
       amount: undefined,
+      tax: 0,
       comment: null,
       fxRate: undefined,
       subtype: null,
@@ -279,11 +286,14 @@ export function DividendForm({
               </div>
             )}
 
-            <AmountInput
-              name="amount"
-              label={isAssetBacked ? "Dividend amount" : "Amount"}
-              currency={currency}
-            />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <AmountInput
+                name="amount"
+                label={isAssetBacked ? "Dividend amount" : "Amount"}
+                currency={currency}
+              />
+              <AmountInput name="tax" label="Withholding tax" currency={currency} />
+            </div>
 
             {/* Advanced Options */}
             <AdvancedOptionsSection

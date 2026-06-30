@@ -574,6 +574,7 @@ export function createDraftActivities(
     const rawAmount = getColumnValue(row, ImportFormat.AMOUNT);
     const rawCurrency = getColumnValue(row, ImportFormat.CURRENCY);
     const rawFee = getColumnValue(row, ImportFormat.FEE);
+    const rawTax = getColumnValue(row, ImportFormat.TAX);
     const rawComment = getColumnValue(row, ImportFormat.COMMENT);
     const rawAccount = getColumnValue(row, ImportFormat.ACCOUNT);
     const rawFxRate = getColumnValue(row, ImportFormat.FX_RATE);
@@ -636,6 +637,7 @@ export function createDraftActivities(
     const amount = parseNumericValue(rawAmount, decimalSeparator, thousandsSeparator);
     const currency = rawCurrency?.trim() || defaultCurrency;
     const fee = parseNumericValue(rawFee, decimalSeparator, thousandsSeparator);
+    const tax = parseNumericValue(rawTax, decimalSeparator, thousandsSeparator);
     const comment = rawComment?.trim();
     const fxRate = parseNumericValue(rawFxRate, decimalSeparator, thousandsSeparator);
     const signedFxSubtype = signedFxTransferType
@@ -713,6 +715,7 @@ export function createDraftActivities(
       amount: resolved.amount,
       currency,
       fee,
+      tax,
       fxRate,
       subtype,
       isExternal,
@@ -754,6 +757,7 @@ export function draftToActivityImport(draft: DraftActivity): ActivityImport {
     quantity: draft.quantity,
     unitPrice: draft.unitPrice,
     fee: draft.fee,
+    tax: draft.tax,
     fxRate: draft.fxRate,
     subtype: subtype && subtype.toUpperCase() !== activityType ? subtype : undefined,
     exchangeMic: draft.exchangeMic,

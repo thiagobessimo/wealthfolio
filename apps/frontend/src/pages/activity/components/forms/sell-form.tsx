@@ -66,6 +66,12 @@ export const sellFormSchema = z
       })
       .min(0, { message: "Fee must be non-negative." })
       .default(0),
+    tax: z.coerce
+      .number({
+        invalid_type_error: "Tax must be a number.",
+      })
+      .min(0, { message: "Tax must be non-negative." })
+      .default(0),
     comment: z.string().optional().nullable(),
     subtype: z.string().optional().nullable(),
     // Advanced options
@@ -192,6 +198,7 @@ export function SellForm({
       quantity: undefined,
       unitPrice: undefined,
       fee: 0,
+      tax: 0,
       comment: null,
       subtype: null,
       fxRate: undefined,
@@ -255,6 +262,7 @@ export function SellForm({
   const optQuantity = watch("quantity");
   const optUnitPrice = watch("unitPrice");
   const optFee = watch("fee");
+  const optTax = watch("tax");
   const optMultiplier = watch("contractMultiplier");
 
   const optionTotal = useMemo(() => {
@@ -262,9 +270,10 @@ export function SellForm({
     const q = Number(optQuantity) || 0;
     const p = Number(optUnitPrice) || 0;
     const f = Number(optFee) || 0;
+    const t = Number(optTax) || 0;
     const m = Number(optMultiplier) || 100;
-    return q * p * m - f;
-  }, [isOption, optQuantity, optUnitPrice, optFee, optMultiplier]);
+    return q * p * m - f - t;
+  }, [isOption, optQuantity, optUnitPrice, optFee, optTax, optMultiplier]);
 
   const handleAssetTypeChange = (value: AssetType) => {
     if (value === "option") {
@@ -536,6 +545,7 @@ export function SellForm({
                 currency={currency}
               />
               <AmountInput name="fee" label="Fee" currency={currency} />
+              <AmountInput name="tax" label="Tax" currency={currency} />
             </div>
 
             {/* Option Total Credit with formula breakdown */}

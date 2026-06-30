@@ -40,6 +40,12 @@ export const interestFormSchema = z
         invalid_type_error: "Amount must be a number.",
       })
       .positive({ message: "Amount must be greater than 0." }),
+    tax: z.coerce
+      .number({
+        invalid_type_error: "Withholding tax must be a number.",
+      })
+      .min(0, { message: "Withholding tax must be non-negative." })
+      .default(0),
     unitPrice: z.coerce
       .number({
         invalid_type_error: "FMV per unit must be a number.",
@@ -129,6 +135,7 @@ export function InterestForm({
       activityDate: new Date(),
       symbol: null,
       amount: undefined,
+      tax: 0,
       quantity: undefined,
       unitPrice: undefined,
       comment: null,
@@ -260,11 +267,14 @@ export function InterestForm({
               </div>
             )}
 
-            <AmountInput
-              name="amount"
-              label={isStakingReward ? "Interest amount" : "Amount"}
-              currency={currency}
-            />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <AmountInput
+                name="amount"
+                label={isStakingReward ? "Interest amount" : "Amount"}
+                currency={currency}
+              />
+              <AmountInput name="tax" label="Withholding tax" currency={currency} />
+            </div>
 
             {/* Advanced Options */}
             <AdvancedOptionsSection

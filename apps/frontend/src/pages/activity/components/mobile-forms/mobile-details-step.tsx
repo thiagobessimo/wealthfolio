@@ -133,6 +133,7 @@ export function MobileDetailsStep({ accounts, activityType, isEditing }: MobileD
   const optQuantity = isBuyOrSell ? watch("quantity") : undefined;
   const optUnitPrice = isBuyOrSell ? watch("unitPrice") : undefined;
   const optFee = isBuyOrSell ? watch("fee") : undefined;
+  const optTax = isBuyOrSell ? watch("tax") : undefined;
   const optMultiplier = isOption ? ((watch("contractMultiplier" as any) as number) ?? 100) : 1;
 
   const optionTotal = useMemo(() => {
@@ -140,9 +141,10 @@ export function MobileDetailsStep({ accounts, activityType, isEditing }: MobileD
     const q = Number(optQuantity) || 0;
     const p = Number(optUnitPrice) || 0;
     const f = Number(optFee) || 0;
+    const t = Number(optTax) || 0;
     const m = Number(optMultiplier) || 100;
-    return activityType === ActivityType.BUY ? q * p * m + f : q * p * m - f;
-  }, [isOption, optQuantity, optUnitPrice, optFee, optMultiplier, activityType]);
+    return activityType === ActivityType.BUY ? q * p * m + f + t : q * p * m - f - t;
+  }, [isOption, optQuantity, optUnitPrice, optFee, optTax, optMultiplier, activityType]);
 
   // Transfer state
   const isTransfer = TRANSFER_ACTIVITY_TYPES.includes(activityType);
@@ -167,6 +169,8 @@ export function MobileDetailsStep({ accounts, activityType, isEditing }: MobileD
   const isAdjustmentActivity = activityType === ActivityType.ADJUSTMENT;
   const isFeeActivity = activityType === ActivityType.FEE;
   const isTaxActivity = activityType === ActivityType.TAX;
+  const isIncomeActivity = isDividendActivity || isInterestActivity;
+  const needsTax = isBuyOrSell || isIncomeActivity;
   const needsAssetSymbol =
     SYMBOL_FIELD_ACTIVITY_TYPES.includes(activityType) || isStakingReward || isSecuritiesTransfer;
   const needsQuantity =
@@ -899,6 +903,23 @@ export function MobileDetailsStep({ accounts, activityType, isEditing }: MobileD
               render={({ field }) => (
                 <FormItem>
                   <FormLabel className="text-base font-medium">Fee (Optional)</FormLabel>
+                  <FormControl>
+                    <MoneyInput {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+          {needsTax && (
+            <FormField
+              control={control}
+              name="tax"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-base font-medium">
+                    {isIncomeActivity ? "Withholding tax (Optional)" : "Tax (Optional)"}
+                  </FormLabel>
                   <FormControl>
                     <MoneyInput {...field} />
                   </FormControl>
