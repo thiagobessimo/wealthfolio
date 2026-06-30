@@ -2378,8 +2378,8 @@ impl PerformanceService {
             }
         };
 
-        let mut buy_charge_by_activity = HashMap::<String, Decimal>::new();
-        let mut sell_charge_by_activity = HashMap::<String, Decimal>::new();
+        let mut trade_charge_by_activity = HashMap::<String, Decimal>::new();
+        let mut fallback_buy_charge_by_activity = HashMap::<String, Decimal>::new();
         for activity in activities {
             let raw_charge = activity.fee_amt() + activity.tax_amt();
             if !activity.is_posted() || raw_charge.is_zero() {
@@ -2407,24 +2407,19 @@ impl PerformanceService {
                 continue;
             };
 
-            match activity_type {
-                ActivityType::Buy => {
-                    buy_charge_by_activity.insert(activity.id, charge);
-                }
-                ActivityType::Sell => {
-                    sell_charge_by_activity.insert(activity.id, charge);
-                }
-                _ => {}
+            if matches!(activity_type, ActivityType::Buy) {
+                fallback_buy_charge_by_activity.insert(activity.id.clone(), charge);
             }
+            trade_charge_by_activity.insert(activity.id, charge);
         }
 
-        if buy_charge_by_activity.is_empty() && sell_charge_by_activity.is_empty() {
+        if trade_charge_by_activity.is_empty() {
             return AttributionEffectSet::default();
         }
 
         let mut lot_by_account_and_id = HashMap::<(String, String), LotRecord>::new();
         let mut loaded_lots = false;
-        if !disposals.is_empty() || !buy_charge_by_activity.is_empty() {
+        if !disposals.is_empty() || !trade_charge_by_activity.is_empty() {
             if let Some(lot_repository) = &self.lot_repository {
                 for account_id in account_ids {
                     match lot_repository.get_all_lots_for_account(account_id).await {
@@ -2449,14 +2444,15 @@ impl PerformanceService {
             }
         }
 
-        let mut saw_period_buy_lot_records = false;
-        let mut remaining_buy_charges_from_lots = Decimal::ZERO;
+        let mut period_open_activity_ids = HashSet::<String>::new();
+        let mut saw_period_open_lot_records = false;
+        let mut remaining_open_charges_from_lots = Decimal::ZERO;
         if loaded_lots {
             for lot in lot_by_account_and_id.values() {
                 let Some(open_activity_id) = lot.open_activity_id.as_ref() else {
                     continue;
                 };
-                if !buy_charge_by_activity.contains_key(open_activity_id) {
+                if !trade_charge_by_activity.contains_key(open_activity_id) {
                     continue;
                 }
                 let Ok(open_date) = NaiveDate::parse_from_str(&lot.open_date, "%Y-%m-%d") else {
@@ -2466,7 +2462,8 @@ impl PerformanceService {
                     continue;
                 }
 
-                saw_period_buy_lot_records = true;
+                saw_period_open_lot_records = true;
+                period_open_activity_ids.insert(open_activity_id.clone());
                 let remaining_quantity = parse_decimal_lossy(&lot.remaining_quantity);
                 if remaining_quantity.is_zero() {
                     continue;
@@ -2483,9 +2480,9 @@ impl PerformanceService {
                     full_charge * remaining_quantity.abs() / original_quantity
                 } else {
                     let original_cost_basis_base =
-                        parse_decimal_lossy(&lot.original_cost_basis_base);
+                        parse_decimal_lossy(&lot.original_cost_basis_base).abs();
                     let remaining_cost_basis_base =
-                        parse_decimal_lossy(&lot.remaining_cost_basis_base);
+                        parse_decimal_lossy(&lot.remaining_cost_basis_base).abs();
                     if original_cost_basis_base > Decimal::ZERO {
                         full_charge * remaining_cost_basis_base / original_cost_basis_base
                     } else {
@@ -2493,7 +2490,7 @@ impl PerformanceService {
                     }
                 };
 
-                remaining_buy_charges_from_lots += remaining_charge;
+                remaining_open_charges_from_lots += remaining_charge;
             }
         }
 
@@ -2514,68 +2511,95 @@ impl PerformanceService {
                 continue;
             }
 
-            let original_cost_basis_base = parse_decimal_lossy(&lot.original_cost_basis_base);
+            let Some(open_activity_id) = lot.open_activity_id.as_ref() else {
+                continue;
+            };
+            if !trade_charge_by_activity.contains_key(open_activity_id) {
+                continue;
+            }
+            period_open_activity_ids.insert(open_activity_id.clone());
+
             let fee_allocated_base = parse_decimal_lossy(&lot.fee_allocated_base);
             let tax_allocated_base = parse_decimal_lossy(&lot.tax_allocated_base);
             let charge_allocated_base = fee_allocated_base + tax_allocated_base;
-            let disposal_cost_basis_base = parse_decimal_lossy(&disposal.cost_basis_base);
-            if original_cost_basis_base <= Decimal::ZERO || charge_allocated_base.is_zero() {
+            if charge_allocated_base.is_zero() {
                 continue;
             }
 
-            acquisition_charges_disposed +=
-                disposal_cost_basis_base * charge_allocated_base / original_cost_basis_base;
+            let original_quantity = parse_decimal_lossy(&lot.original_quantity).abs();
+            let disposed_quantity = parse_decimal_lossy(&disposal.quantity).abs();
+            if original_quantity > Decimal::ZERO {
+                acquisition_charges_disposed +=
+                    charge_allocated_base * disposed_quantity / original_quantity;
+            } else {
+                let original_cost_basis_base =
+                    parse_decimal_lossy(&lot.original_cost_basis_base).abs();
+                let disposal_cost_basis_base = parse_decimal_lossy(&disposal.cost_basis_base).abs();
+                if original_cost_basis_base > Decimal::ZERO {
+                    acquisition_charges_disposed +=
+                        disposal_cost_basis_base * charge_allocated_base / original_cost_basis_base;
+                }
+            }
         }
 
-        let period_buy_charges = buy_charge_by_activity
-            .values()
+        let mut period_open_charges = period_open_activity_ids
+            .iter()
+            .filter_map(|activity_id| trade_charge_by_activity.get(activity_id))
             .copied()
             .sum::<Decimal>()
             .round_dp(DECIMAL_PRECISION);
-        let period_sell_charges = disposal_activity_ids
+        if period_open_charges.is_zero() && !saw_period_open_lot_records {
+            period_open_charges = fallback_buy_charge_by_activity
+                .iter()
+                .filter(|(activity_id, _)| !disposal_activity_ids.contains(*activity_id))
+                .map(|(_, charge)| *charge)
+                .sum::<Decimal>()
+                .round_dp(DECIMAL_PRECISION);
+        }
+        let period_disposal_charges = disposal_activity_ids
             .iter()
-            .filter_map(|activity_id| sell_charge_by_activity.get(activity_id))
+            .filter_map(|activity_id| trade_charge_by_activity.get(activity_id))
             .copied()
             .sum::<Decimal>()
             .round_dp(DECIMAL_PRECISION);
         let acquisition_charges_disposed = acquisition_charges_disposed
-            .min(period_buy_charges)
+            .min(period_open_charges)
             .round_dp(DECIMAL_PRECISION);
-        let remaining_period_buy_charges = if saw_period_buy_lot_records {
-            remaining_buy_charges_from_lots
-                .min(period_buy_charges)
+        let remaining_period_open_charges = if saw_period_open_lot_records {
+            remaining_open_charges_from_lots
+                .min(period_open_charges)
                 .round_dp(DECIMAL_PRECISION)
         } else {
-            (period_buy_charges - acquisition_charges_disposed).round_dp(DECIMAL_PRECISION)
+            (period_open_charges - acquisition_charges_disposed).round_dp(DECIMAL_PRECISION)
         };
 
-        if period_sell_charges.is_zero()
+        if period_disposal_charges.is_zero()
             && acquisition_charges_disposed.is_zero()
-            && remaining_period_buy_charges.is_zero()
+            && remaining_period_open_charges.is_zero()
         {
             return AttributionEffectSet::default();
         }
 
         let mut effects = Vec::new();
-        if !period_sell_charges.is_zero() || !acquisition_charges_disposed.is_zero() {
+        if !period_disposal_charges.is_zero() || !acquisition_charges_disposed.is_zero() {
             let mut effect = Self::synthetic_attribution_effect(
                 "__trade_charge_realized_gross_up__",
                 result,
                 end_date,
                 EconomicEventKind::Trade,
             );
-            effect.realized_pnl =
-                (period_sell_charges + acquisition_charges_disposed).round_dp(DECIMAL_PRECISION);
+            effect.realized_pnl = (period_disposal_charges + acquisition_charges_disposed)
+                .round_dp(DECIMAL_PRECISION);
             effects.push(effect);
         }
-        if !remaining_period_buy_charges.is_zero() {
+        if !remaining_period_open_charges.is_zero() {
             let mut effect = Self::synthetic_attribution_effect(
                 "__trade_charge_unrealized_gross_up__",
                 result,
                 end_date,
                 EconomicEventKind::Trade,
             );
-            effect.unrealized_movement = remaining_period_buy_charges.round_dp(DECIMAL_PRECISION);
+            effect.unrealized_movement = remaining_period_open_charges.round_dp(DECIMAL_PRECISION);
             effects.push(effect);
         }
 
@@ -7015,6 +7039,87 @@ mod tests {
         );
 
         let effects = performance_service_with_lot
+            .collect_trade_charge_pnl_gross_up_event_effects(
+                &result,
+                &["acct".to_string()],
+                Some(empty_disposals.as_slice()),
+            )
+            .await;
+
+        assert!(effects.complete);
+        assert_eq!(effects.effects.len(), 1);
+        assert_eq!(effects.effects[0].realized_pnl, Decimal::ZERO);
+        assert_eq!(effects.effects[0].unrealized_movement, dec!(7));
+    }
+
+    #[tokio::test]
+    async fn open_short_trade_charges_are_grossed_up_as_unrealized_without_disposals() {
+        let mut sell = sell_activity_on(
+            "sell-open-short-charge",
+            "acct",
+            "2026-05-02",
+            dec!(1),
+            dec!(100),
+        );
+        sell.fee = Some(dec!(5));
+        sell.tax = Some(dec!(2));
+
+        let mut open_lot =
+            lot_record_for_fee_gross_up("lot-open-short-charge", "acct", "sell-open-short-charge");
+        open_lot.original_quantity = "-1".to_string();
+        open_lot.remaining_quantity = "-1".to_string();
+        open_lot.original_cost_basis = "-93".to_string();
+        open_lot.remaining_cost_basis = "-93".to_string();
+        open_lot.original_cost_basis_base = "-93".to_string();
+        open_lot.remaining_cost_basis_base = "-93".to_string();
+        open_lot.fee_allocated = "5".to_string();
+        open_lot.fee_allocated_base = "5".to_string();
+        open_lot.tax_allocated = "2".to_string();
+        open_lot.tax_allocated_base = "2".to_string();
+        open_lot.is_closed = false;
+        open_lot.close_date = None;
+        open_lot.close_activity_id = None;
+
+        let performance_service = PerformanceService::new(
+            Arc::new(TestValuationService::new(Vec::new())),
+            Arc::new(TestQuoteService),
+        )
+        .with_lot_repository(Arc::new(TestLotRepository {
+            lots: vec![open_lot],
+            ..Default::default()
+        }))
+        .with_activity_repository(
+            Arc::new(TestActivityRepository::new(vec![sell])),
+            Arc::new(TestFxService),
+        );
+        let result = PerformanceService::build_result(
+            "scope:acct".to_string(),
+            "USD".to_string(),
+            Some(date("2026-05-01")),
+            Some(date("2026-05-02")),
+            ReturnMethod::ValueReturn,
+            PerformanceReturns {
+                twr: None,
+                annualized_twr: None,
+                irr: None,
+                annualized_irr: None,
+                value_return: None,
+                annualized_value_return: None,
+            },
+            PerformanceAttribution::default(),
+            PerformanceService::empty_risk(),
+            PerformanceDataQuality {
+                status: DataQualityStatus::Ok,
+                warnings: Vec::new(),
+                not_applicable_reasons: Vec::new(),
+            },
+            Vec::new(),
+            false,
+            false,
+        );
+
+        let empty_disposals: Vec<LotDisposal> = Vec::new();
+        let effects = performance_service
             .collect_trade_charge_pnl_gross_up_event_effects(
                 &result,
                 &["acct".to_string()],

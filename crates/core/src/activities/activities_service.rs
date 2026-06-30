@@ -1263,7 +1263,7 @@ impl ActivityService {
         // Normalize to absolute values and major currencies, matching what
         // prepare_activities_internal does before the apply-step key computation.
         let quantity = activity.quantity.map(|v| v.abs());
-        let (unit_price, amount, fee, tax, currency) =
+        let (unit_price, amount, fee, currency) =
             if let Some(rule) = get_normalization_rule(activity.currency.as_str()) {
                 let unit_price = activity
                     .unit_price
@@ -1274,10 +1274,7 @@ impl ActivityService {
                 let fee = activity
                     .fee
                     .map(|v| normalize_amount(v.abs(), activity.currency.as_str()).0);
-                let tax = activity
-                    .tax
-                    .map(|v| normalize_amount(v.abs(), activity.currency.as_str()).0);
-                (unit_price, amount, fee, tax, rule.major_code)
+                (unit_price, amount, fee, rule.major_code)
             } else {
                 let ccy = if activity.currency.trim().is_empty() {
                     "USD"
@@ -1288,7 +1285,6 @@ impl ActivityService {
                     activity.unit_price.map(|v| v.abs()),
                     activity.amount.map(|v| v.abs()),
                     activity.fee.map(|v| v.abs()),
-                    activity.tax.map(|v| v.abs()),
                     ccy,
                 )
             };
@@ -1302,7 +1298,6 @@ impl ActivityService {
             unit_price,
             amount,
             fee,
-            tax,
             currency,
             None,
             activity.comment.as_deref(),
@@ -2303,7 +2298,6 @@ impl ActivityService {
                 activity.unit_price,
                 activity.amount,
                 activity.fee,
-                activity.tax,
                 &activity.currency,
                 activity.source_record_id.as_deref(),
                 activity.notes.as_deref(),
@@ -5839,7 +5833,6 @@ impl ActivityService {
                     activity.unit_price,
                     activity.amount,
                     activity.fee,
-                    activity.tax,
                     &activity.currency,
                     activity.source_record_id.as_deref(),
                     activity.notes.as_deref(),

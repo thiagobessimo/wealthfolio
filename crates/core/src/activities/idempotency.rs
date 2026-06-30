@@ -18,7 +18,6 @@ use sha2::{Digest, Sha256};
 /// - unit_price
 /// - amount
 /// - non-zero fee
-/// - non-zero tax
 /// - currency
 /// - provider_reference_id (if available - huge win for deduplication)
 /// - description/notes
@@ -34,7 +33,6 @@ pub fn compute_idempotency_key(
     unit_price: Option<Decimal>,
     amount: Option<Decimal>,
     fee: Option<Decimal>,
-    tax: Option<Decimal>,
     currency: &str,
     provider_reference_id: Option<&str>,
     description: Option<&str>,
@@ -89,17 +87,9 @@ pub fn compute_idempotency_key(
         hasher.update(normalized.as_bytes());
     }
 
-    let fee = fee.filter(|value| !value.is_zero());
-    let tax = tax.filter(|value| !value.is_zero());
-    if fee.is_some() || tax.is_some() {
-        hasher.update(b"\x1fcharges\x1f");
-        if let Some(fee) = fee {
-            hasher.update(normalize_decimal(fee).as_bytes());
-        }
-        hasher.update(b"\x1f");
-        if let Some(tax) = tax {
-            hasher.update(normalize_decimal(tax).as_bytes());
-        }
+    if let Some(fee) = fee.filter(|value| !value.is_zero()) {
+        hasher.update(b"\x1ffee\x1f");
+        hasher.update(normalize_decimal(fee).as_bytes());
     }
 
     // Convert to hex string
@@ -129,7 +119,6 @@ pub fn compute_activity_idempotency_key(activity: &crate::activities::Activity) 
         activity.unit_price,
         activity.amount,
         activity.fee,
-        activity.tax,
         &activity.currency,
         activity.source_record_id.as_deref(),
         activity.notes.as_deref(),
@@ -162,7 +151,6 @@ mod tests {
             Some(Decimal::from(150)),
             Some(Decimal::from(15000)),
             None,
-            None,
             "USD",
             None,
             None,
@@ -185,7 +173,6 @@ mod tests {
             Some(Decimal::from(150)),
             Some(Decimal::from(15000)),
             None,
-            None,
             "USD",
             None,
             None,
@@ -199,7 +186,6 @@ mod tests {
             Some(Decimal::from(100)),
             Some(Decimal::from(150)),
             Some(Decimal::from(15000)),
-            None,
             None,
             "USD",
             None,
@@ -224,7 +210,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "USD",
             None,
             None,
@@ -236,7 +221,6 @@ mod tests {
             &date2,
             Some("AAPL"),
             Some(Decimal::from(100)),
-            None,
             None,
             None,
             None,
@@ -261,7 +245,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "USD",
             None,
             None,
@@ -273,7 +256,6 @@ mod tests {
             &date,
             Some("AAPL"),
             Some(Decimal::from(100)),
-            None,
             None,
             None,
             None,
@@ -298,7 +280,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             "USD",
             Some("ref-123"),
             None,
@@ -310,7 +291,6 @@ mod tests {
             &date,
             Some("AAPL"),
             Some(Decimal::from(100)),
-            None,
             None,
             None,
             None,
@@ -335,7 +315,6 @@ mod tests {
             Some(Decimal::from(150)),
             None,
             Some(Decimal::from(1)),
-            None,
             "USD",
             None,
             None,
@@ -350,7 +329,6 @@ mod tests {
             Some(Decimal::from(150)),
             None,
             Some(Decimal::from(2)),
-            None,
             "USD",
             None,
             None,
@@ -360,10 +338,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tax_included() {
+    fn test_zero_fee_matches_absent_fee() {
         let date = Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
 
-        let key1 = compute_idempotency_key(
+        let key_without_fee = compute_idempotency_key(
             "account-1",
             "BUY",
             &date,
@@ -372,50 +350,12 @@ mod tests {
             Some(Decimal::from(150)),
             None,
             None,
-            Some(Decimal::from(1)),
             "USD",
             None,
             None,
         );
 
-        let key2 = compute_idempotency_key(
-            "account-1",
-            "BUY",
-            &date,
-            Some("AAPL"),
-            Some(Decimal::from(100)),
-            Some(Decimal::from(150)),
-            None,
-            None,
-            Some(Decimal::from(2)),
-            "USD",
-            None,
-            None,
-        );
-
-        assert_ne!(key1, key2);
-    }
-
-    #[test]
-    fn test_zero_fee_and_tax_match_absent_charges() {
-        let date = Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
-
-        let key_without_charges = compute_idempotency_key(
-            "account-1",
-            "BUY",
-            &date,
-            Some("AAPL"),
-            Some(Decimal::from(100)),
-            Some(Decimal::from(150)),
-            None,
-            None,
-            None,
-            "USD",
-            None,
-            None,
-        );
-
-        let key_with_zero_charges = compute_idempotency_key(
+        let key_with_zero_fee = compute_idempotency_key(
             "account-1",
             "BUY",
             &date,
@@ -424,13 +364,12 @@ mod tests {
             Some(Decimal::from(150)),
             None,
             Some(Decimal::ZERO),
-            Some(Decimal::ZERO),
             "USD",
             None,
             None,
         );
 
-        assert_eq!(key_without_charges, key_with_zero_charges);
+        assert_eq!(key_without_fee, key_with_zero_fee);
     }
 
     #[test]

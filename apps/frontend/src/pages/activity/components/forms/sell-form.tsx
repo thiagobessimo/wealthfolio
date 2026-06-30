@@ -578,6 +578,18 @@ export function SellForm({
                           : Number(optFee)}
                       </>
                     )}
+                    {Number(optTax) > 0 && (
+                      <>
+                        {" "}
+                        −{" "}
+                        {currency
+                          ? new Intl.NumberFormat("en-US", {
+                              style: "currency",
+                              currency,
+                            }).format(Number(optTax))
+                          : Number(optTax)}
+                      </>
+                    )}
                   </p>
                 </div>
                 <span className="text-lg font-semibold tabular-nums">

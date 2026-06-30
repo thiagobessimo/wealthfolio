@@ -796,6 +796,12 @@ export function MobileDetailsStep({ accounts, activityType, isEditing }: MobileD
                             {activityType === ActivityType.BUY ? "+" : "−"} {Number(optFee)}
                           </>
                         )}
+                        {Number(optTax) > 0 && (
+                          <>
+                            {" "}
+                            {activityType === ActivityType.BUY ? "+" : "−"} {Number(optTax)}
+                          </>
+                        )}
                       </p>
                     </div>
                     <span className="text-lg font-semibold tabular-nums">

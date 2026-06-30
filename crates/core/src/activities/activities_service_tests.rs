@@ -2913,7 +2913,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_allows_same_trade_with_different_tax() {
+    async fn test_create_rejects_same_trade_with_different_tax() {
         let account_service = Arc::new(MockAccountService::new());
         let asset_service = Arc::new(MockAssetService::new());
         let fx_service = Arc::new(MockFxService::new());
@@ -2966,16 +2966,20 @@ mod tests {
 
         let mut different_tax_activity = taxable_activity;
         different_tax_activity.tax = Some(dec!(2));
-        activity_service
+        let err = activity_service
             .create_activity(different_tax_activity)
             .await
-            .expect("same trade with different tax should not be a duplicate");
+            .expect_err("same trade with different tax should still be a duplicate");
 
         let stored = activity_repository
             .get_activities()
             .expect("stored activities should be readable");
-        assert_eq!(stored.len(), 2);
-        assert_ne!(stored[0].idempotency_key, stored[1].idempotency_key);
+        assert_eq!(stored.len(), 1);
+        assert!(
+            err.to_string().contains("Duplicate activity detected"),
+            "error should clearly explain duplicate detection: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -8248,7 +8252,6 @@ mod tests {
             None,
             Some(dec!(500)),
             None,
-            None,
             "USD",
             None,
             None,
@@ -9230,7 +9233,6 @@ mod tests {
             Some(dec!(100)),
             Some(dec!(100)),
             None,
-            None,
             "GBP",
             None,
             None,
@@ -9444,7 +9446,6 @@ mod tests {
             Some(dec!(1)),
             Some(dec!(100)),
             Some(dec!(100)),
-            None,
             None,
             "GBP",
             None,
