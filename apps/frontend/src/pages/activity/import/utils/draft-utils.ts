@@ -644,7 +644,8 @@ export function createDraftActivities(
       ? normalizeSignAwareActivityLabel(rawType)
       : undefined;
     const rawTypePositionIntentSubtype = rawTypePositionIntentType ? rawType : undefined;
-    const normalizedSubtype = rawSubtype?.trim() ?? rawTypePositionIntentSubtype ?? signedFxSubtype;
+    const trimmedRawSubtype = rawSubtype?.trim();
+    const normalizedSubtype = trimmedRawSubtype || rawTypePositionIntentSubtype || signedFxSubtype;
     const inferredCreditSubtype =
       activityType === ActivityType.CREDIT &&
       (REIMBURSEMENT_LABELS.has(normalizeSignAwareActivityLabel(rawType)) ||

@@ -561,6 +561,7 @@ export function BuyForm({
           assetCurrency={assetCurrencyFromSymbol ?? normalizeCurrency(assetCurrency)}
           accountCurrency={accountCurrency}
           baseCurrency={baseCurrency}
+          showSubtype={false}
         >
           <NotesInput name="comment" label="Notes" placeholder="Add an optional note..." />
         </AdvancedOptionsSection>

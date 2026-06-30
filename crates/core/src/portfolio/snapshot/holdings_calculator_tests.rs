@@ -7484,6 +7484,27 @@ mod tests {
         let pos_a_after = result_a_xfer.snapshot.positions.get(option_symbol);
         assert!(pos_a_after.is_none_or(|position| position.quantity == Decimal::ZERO));
 
+        let transfer_disposals = calculator.take_lot_disposals("acc_a", "FIFO");
+        assert_eq!(transfer_disposals.len(), 1);
+        let transfer_disposal = &transfer_disposals[0];
+        assert_eq!(transfer_disposal.disposal_activity_id, "xfer_out_short_opt");
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.quantity).unwrap(),
+            dec!(-2)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.proceeds).unwrap(),
+            dec!(-400)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.cost_basis).unwrap(),
+            dec!(-400)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.realized_pnl).unwrap(),
+            Decimal::ZERO
+        );
+
         let prev_b = create_initial_snapshot("acc_b", "USD", "2025-05-31");
         let transfer_in = create_transfer_activity(
             "xfer_in_short_opt",
@@ -7938,6 +7959,30 @@ mod tests {
             .unwrap();
         let pos_a_after = result_a_xfer.snapshot.positions.get("AAPL");
         assert!(pos_a_after.is_none_or(|position| position.quantity == Decimal::ZERO));
+
+        let transfer_disposals = calculator.take_lot_disposals("acc_a", "FIFO");
+        assert_eq!(transfer_disposals.len(), 1);
+        let transfer_disposal = &transfer_disposals[0];
+        assert_eq!(
+            transfer_disposal.disposal_activity_id,
+            "xfer_out_short_stock"
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.quantity).unwrap(),
+            dec!(-4)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.proceeds).unwrap(),
+            dec!(-400)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.cost_basis).unwrap(),
+            dec!(-400)
+        );
+        assert_eq!(
+            Decimal::from_str(&transfer_disposal.realized_pnl).unwrap(),
+            Decimal::ZERO
+        );
 
         let prev_b = create_initial_snapshot("acc_b", "USD", "2026-06-26");
         let transfer_in = create_transfer_activity(

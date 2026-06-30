@@ -278,6 +278,44 @@ describe("createDraftActivities explicit activity mapping", () => {
     expect(drafts[1].subtype).toBe(ACTIVITY_SUBTYPES.POSITION_CLOSE);
   });
 
+  it("preserves raw stock short intent when mapped subtype column is blank", () => {
+    const drafts = createDraftActivities(
+      [
+        ["2024-03-15", "SELL_SHORT", "AAPL", "1", "200", "USD", ""],
+        ["2024-03-16", "BUY_TO_COVER", "AAPL", "1", "180", "USD", "   "],
+      ],
+      [
+        ImportFormat.DATE,
+        ImportFormat.ACTIVITY_TYPE,
+        ImportFormat.SYMBOL,
+        ImportFormat.QUANTITY,
+        ImportFormat.UNIT_PRICE,
+        ImportFormat.CURRENCY,
+        ImportFormat.SUBTYPE,
+      ],
+      {
+        ...baseMapping,
+        fieldMappings: {
+          [ImportFormat.DATE]: ImportFormat.DATE,
+          [ImportFormat.ACTIVITY_TYPE]: ImportFormat.ACTIVITY_TYPE,
+          [ImportFormat.SYMBOL]: ImportFormat.SYMBOL,
+          [ImportFormat.QUANTITY]: ImportFormat.QUANTITY,
+          [ImportFormat.UNIT_PRICE]: ImportFormat.UNIT_PRICE,
+          [ImportFormat.CURRENCY]: ImportFormat.CURRENCY,
+          [ImportFormat.SUBTYPE]: ImportFormat.SUBTYPE,
+        },
+      },
+      parseConfig,
+      "account-1",
+    );
+
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0].activityType).toBe(ActivityType.SELL);
+    expect(drafts[0].subtype).toBe(ACTIVITY_SUBTYPES.POSITION_OPEN);
+    expect(drafts[1].activityType).toBe(ActivityType.BUY);
+    expect(drafts[1].subtype).toBe(ACTIVITY_SUBTYPES.POSITION_CLOSE);
+  });
+
   it("infers Wealthsimple FxExchange transfer direction from signed amount", () => {
     const drafts = createDraftActivities(
       [

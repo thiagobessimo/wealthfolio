@@ -457,18 +457,24 @@ impl HoldingsCalculator {
                 // Positions are single-signed (transfer-in nets opposite-sign
                 // lots), so dispatching on the net position sign relieves the
                 // correct leg.
-                let reduction = if position.quantity.is_sign_negative() {
+                let transferred_short_position = position.quantity.is_sign_negative();
+                let reduction = if transferred_short_position {
                     position.reduce_negative_lots_fifo(activity.qty())?
                 } else {
                     position.reduce_lots_fifo(activity.qty())?
                 };
                 let cost_basis_removed = reduction.cost_basis_removed;
+                let disposal_proceeds = if transferred_short_position {
+                    cost_basis_removed.abs()
+                } else {
+                    cost_basis_removed
+                };
                 self.record_reduction(
                     &state.account_id,
                     asset_id,
                     activity,
                     &reduction,
-                    cost_basis_removed,
+                    disposal_proceeds,
                     &position_currency,
                     run,
                     buffer,
