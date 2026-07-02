@@ -1,5 +1,5 @@
 import { vi, describe, it, expect } from "vitest";
-import { createSDKHostAPIBridge, type InternalHostAPI } from "./type-bridge";
+import { createPermissionGuard, createSDKHostAPIBridge, type InternalHostAPI } from "./type-bridge";
 
 describe("Addon Type Bridge", () => {
   describe("createSDKHostAPIBridge", () => {
@@ -68,6 +68,135 @@ describe("Addon Type Bridge", () => {
 
       // Should fallback to default addon ID for empty string
       expect(mockLogInfo).toHaveBeenCalledWith("[unknown-addon] test message");
+    });
+
+    it("should enforce granted function permissions", () => {
+      const mockGetHoldings = vi.fn();
+      const mockUpdateSettings = vi.fn();
+      const guard = createPermissionGuard("test-addon", [
+        {
+          category: "portfolio",
+          purpose: "Portfolio access",
+          functions: [{ name: "getHoldings", isDeclared: true, isDetected: false }],
+        },
+      ]);
+
+      const sdkAPI = createSDKHostAPIBridge(
+        {
+          getHoldings: mockGetHoldings,
+          updateSettings: mockUpdateSettings,
+          logError: vi.fn(),
+          logInfo: vi.fn(),
+          logWarn: vi.fn(),
+          logTrace: vi.fn(),
+          logDebug: vi.fn(),
+        } as unknown as InternalHostAPI,
+        "test-addon",
+        guard,
+      );
+
+      sdkAPI.portfolio.getHoldings("account-1");
+
+      expect(mockGetHoldings).toHaveBeenCalledWith("account-1");
+      expect(() => sdkAPI.settings.update({})).toThrow(
+        "Addon 'test-addon' is not allowed to call settings.update",
+      );
+    });
+
+    it("should allow legacy addon navigation when router permission is granted", () => {
+      const guard = createPermissionGuard("test-addon", [
+        {
+          category: "ui",
+          purpose: "Navigation",
+          functions: [{ name: "router.add", isDeclared: true, isDetected: false }],
+        },
+      ]);
+
+      expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
+    });
+
+    it("should not expose the raw QueryClient", () => {
+      const sdkAPI = createSDKHostAPIBridge(
+        {
+          logError: vi.fn(),
+          logInfo: vi.fn(),
+          logWarn: vi.fn(),
+          logTrace: vi.fn(),
+          logDebug: vi.fn(),
+        } as unknown as InternalHostAPI,
+        "test-addon",
+      );
+
+      expect(() => sdkAPI.query.getClient()).toThrow(
+        "Direct QueryClient access is not available to addons",
+      );
+    });
+
+    it("should require secrets.use for network auth injection", async () => {
+      const mockAddonNetworkRequest = vi.fn();
+      const networkOnlyGuard = createPermissionGuard("test-addon", [
+        {
+          category: "network",
+          purpose: "Network access",
+          functions: [{ name: "request", isDeclared: true, isDetected: false }],
+        },
+      ]);
+
+      const networkOnlyAPI = createSDKHostAPIBridge(
+        {
+          addonNetworkRequest: mockAddonNetworkRequest,
+          logError: vi.fn(),
+          logInfo: vi.fn(),
+          logWarn: vi.fn(),
+          logTrace: vi.fn(),
+          logDebug: vi.fn(),
+        } as unknown as InternalHostAPI,
+        "test-addon",
+        networkOnlyGuard,
+      );
+
+      expect(() =>
+        networkOnlyAPI.network.request({
+          url: "https://api.example.com/v1",
+          auth: { type: "bearer", secretKey: "api-token" },
+        }),
+      ).toThrow("Addon 'test-addon' is not allowed to call secrets.use");
+      expect(mockAddonNetworkRequest).not.toHaveBeenCalled();
+
+      const authGuard = createPermissionGuard("test-addon", [
+        {
+          category: "network",
+          purpose: "Network access",
+          functions: [{ name: "request", isDeclared: true, isDetected: false }],
+        },
+        {
+          category: "secrets",
+          purpose: "Use network secrets",
+          functions: [{ name: "use", isDeclared: true, isDetected: false }],
+        },
+      ]);
+      const authAPI = createSDKHostAPIBridge(
+        {
+          addonNetworkRequest: mockAddonNetworkRequest,
+          logError: vi.fn(),
+          logInfo: vi.fn(),
+          logWarn: vi.fn(),
+          logTrace: vi.fn(),
+          logDebug: vi.fn(),
+        } as unknown as InternalHostAPI,
+        "test-addon",
+        authGuard,
+      );
+
+      await authAPI.network.request({
+        url: "https://api.example.com/v1",
+        auth: { type: "bearer", secretKey: "api-token" },
+      });
+
+      expect(mockAddonNetworkRequest).toHaveBeenCalledWith({
+        url: "https://api.example.com/v1",
+        auth: { type: "bearer", secretKey: "api-token" },
+      });
     });
   });
 });

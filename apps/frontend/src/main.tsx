@@ -1,6 +1,5 @@
 import { isDesktop, getPlatform } from "@/adapters";
 import React from "react";
-import * as ReactDOMLegacy from "react-dom";
 import ReactDOM from "react-dom/client";
 import { debugAddonState, isAddonDevModeEnabled, loadAllAddons } from "./addons/addons-loader";
 import "./addons/addons-runtime-context";
@@ -21,13 +20,14 @@ if (isAddonDevModeEnabled) {
   });
 }
 
-// Expose React and ReactDOM globally for addons
-// ReactDOM/client only has createRoot/hydrateRoot, but addons need createPortal from react-dom
-window.React = React;
-window.ReactDOM = ReactDOMLegacy;
-
-// Make debug function available globally for debugging
-globalThis.debugAddons = debugAddonState;
+if (import.meta.env.DEV) {
+  Object.defineProperty(globalThis, "debugAddons", {
+    configurable: true,
+    enumerable: false,
+    value: debugAddonState,
+    writable: false,
+  });
+}
 
 // Load addons after context is injected
 loadAllAddons();
