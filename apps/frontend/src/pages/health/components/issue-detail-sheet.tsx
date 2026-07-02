@@ -134,6 +134,25 @@ function getDetailDate(lines: string[]): string | null {
   return match?.[1] ?? null;
 }
 
+function diagnosticCodeFromIssueId(id: string): string {
+  const groupingKey = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
+  return groupingKey
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.toUpperCase())
+    .join("_");
+}
+
+function isFallbackDiagnosticIssue(issue: HealthIssue, diagnostics: HealthDiagnostic[]): boolean {
+  if (diagnostics.length !== 1) return false;
+  const [diagnostic] = diagnostics;
+  return (
+    diagnostic.code === diagnosticCodeFromIssueId(issue.id) &&
+    diagnostic.title === issue.title &&
+    diagnostic.explanation === issue.message
+  );
+}
+
 interface DiagnosticGroup {
   key: string;
   title: string;
@@ -154,6 +173,11 @@ interface PriceDiagnosticAssetGroup {
   label: string;
   dates: string[];
   route?: string;
+}
+
+interface DiagnosticActionEntry {
+  key: string;
+  action: DiagnosticAction;
 }
 
 const GENERIC_EVIDENCE_LABELS = new Set([
@@ -186,6 +210,43 @@ function groupDiagnostics(diagnostics: HealthDiagnostic[]): DiagnosticGroup[] {
 
 function getPrimaryDiagnosticAction(diagnostic: HealthDiagnostic): DiagnosticAction | undefined {
   return diagnostic.actions.find((action) => action.primary) ?? diagnostic.actions[0];
+}
+
+function getOrderedDiagnosticActions(diagnostic: HealthDiagnostic): DiagnosticAction[] {
+  const primary = diagnostic.actions.filter((action) => action.primary);
+  const secondary = diagnostic.actions.filter((action) => !action.primary);
+  return [...primary, ...secondary];
+}
+
+function stringifyActionPart(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return String(value);
+  }
+}
+
+function getDiagnosticActionSignature(action: DiagnosticAction): string {
+  if (action.kind === "navigate") {
+    return `navigate:${action.route}:${action.label}:${stringifyActionPart(action.query)}`;
+  }
+  return `fix:${action.id}:${action.label}:${stringifyActionPart(action.payload)}`;
+}
+
+function getDiagnosticActionEntries(
+  diagnostics: HealthDiagnostic[],
+  includePrimary: boolean,
+): DiagnosticActionEntry[] {
+  const seen = new Set<string>();
+  return diagnostics.flatMap((diagnostic) =>
+    getOrderedDiagnosticActions(diagnostic).flatMap((action) => {
+      if (!includePrimary && action.primary) return [];
+      const signature = getDiagnosticActionSignature(action);
+      if (seen.has(signature)) return [];
+      seen.add(signature);
+      return [{ key: `${diagnostic.fingerprint}:${signature}`, action }];
+    }),
+  );
 }
 
 function isPriceDateDiagnostic(diagnostic: HealthDiagnostic): boolean {
@@ -345,6 +406,8 @@ export function IssueDetailSheet({
   const diagnosticGroups = groupDiagnostics(diagnostics);
   const isGroupedPrice = isGroupedPriceIssue(diagnosticGroups);
   const hasDiagnosticActions = diagnostics.some((diagnostic) => diagnostic.actions.length > 0);
+  const shouldRenderDetails =
+    !hasDiagnostics || isFallbackDiagnosticIssue(issue, diagnostics);
   const detailItems =
     issue.details
       ?.split(/\n\s*\n/)
@@ -444,6 +507,12 @@ export function IssueDetailSheet({
                   const priceAssetGroups = shouldGroupByAsset
                     ? buildPriceAssetGroups(group.diagnostics)
                     : [];
+                  const actionEntries = shouldGroupByAsset
+                    ? []
+                    : getDiagnosticActionEntries(
+                        group.diagnostics,
+                        group.diagnostics.length === 1,
+                      );
 
                   return (
                     <div key={group.key} className="space-y-3">
@@ -542,51 +611,49 @@ export function IssueDetailSheet({
                             })}
                       </div>
 
-                      {group.diagnostics.length === 1 &&
-                        (() => {
-                          const action = getPrimaryDiagnosticAction(group.diagnostics[0]);
-                          if (!action) return null;
-
-                          if (action.kind === "navigate") {
-                            return (
-                              <Button variant="outline" size="sm" asChild>
+                      {actionEntries.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {actionEntries.map(({ key, action }) =>
+                            action.kind === "navigate" ? (
+                              <Button key={key} variant="outline" size="sm" asChild>
                                 <Link to={buildDiagnosticRoute(action)}>
                                   <Icons.ArrowRight className="mr-2 h-4 w-4" />
                                   {action.label}
                                 </Link>
                               </Button>
-                            );
-                          }
-
-                          return (
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={isFixing}
-                              onClick={() =>
-                                onRunFixAction({
-                                  id: action.id,
-                                  label: action.label,
-                                  payload: action.payload,
-                                })
-                              }
-                            >
-                              {isFixing ? (
-                                <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />
-                              ) : (
-                                <Icons.Wand2 className="mr-2 h-4 w-4" />
-                              )}
-                              {action.label}
-                            </Button>
-                          );
-                        })()}
+                            ) : (
+                              <Button
+                                key={key}
+                                type="button"
+                                variant={action.primary ? "default" : "outline"}
+                                size="sm"
+                                disabled={isFixing}
+                                onClick={() =>
+                                  onRunFixAction({
+                                    id: action.id,
+                                    label: action.label,
+                                    payload: action.payload,
+                                  })
+                                }
+                              >
+                                {isFixing ? (
+                                  <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Icons.Wand2 className="mr-2 h-4 w-4" />
+                                )}
+                                {action.label}
+                              </Button>
+                            ),
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             )}
 
-            {!hasDiagnostics && detailItems.length > 0 && (
+            {shouldRenderDetails && detailItems.length > 0 && (
               <div className="space-y-2">
                 <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
                   Details

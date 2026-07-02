@@ -167,6 +167,36 @@ describe("IssueDetailSheet", () => {
     expect(screen.getByText("Date: 2025-03-02")).toHaveClass("font-mono", "tabular-nums");
   });
 
+  it("keeps legacy details visible for fallback diagnostics", () => {
+    const message =
+      "One or more accounts show a negative total value in their history. This is usually caused by missing buy transactions. Review your activities to fix this.";
+    renderIssueSheet({
+      ...baseIssue,
+      id: "negative_account_balance:abc123",
+      category: "DATA_CONSISTENCY",
+      title: "Account has negative portfolio balance",
+      message,
+      details:
+        "TFSA\nFirst went negative on 2026-06-01.\nCash: -100.00 CAD | Investments: 50.00 CAD\nLikely missing Transfer In or deposit before a buy transaction.",
+      diagnostics: [
+        {
+          ...diagnosticMeta,
+          fingerprint: "fallback",
+          domain: "ledger",
+          code: "NEGATIVE_ACCOUNT_BALANCE",
+          title: "Account has negative portfolio balance",
+          explanation: message,
+          evidence: [{ label: "Item", value: "TFSA" }],
+          actions: [],
+        },
+      ],
+    });
+
+    expect(screen.getByText("Details")).toBeInTheDocument();
+    expect(screen.getByText("First went negative on 2026-06-01.")).toBeInTheDocument();
+    expect(screen.getByText(/Likely missing Transfer In/i)).toBeInTheDocument();
+  });
+
   it("serializes filtered activity navigation query params", () => {
     renderIssueSheet({
       ...baseIssue,
@@ -293,8 +323,8 @@ describe("IssueDetailSheet", () => {
     expect(screen.queryByText("INCOMPLETE_BASIS_ACTIVITY")).not.toBeInTheDocument();
     expect(screen.queryByText("Root cause")).not.toBeInTheDocument();
     expect(screen.queryByText("Details")).not.toBeInTheDocument();
-    // Only the primary "go to the activity" affordance; the secondary rebuild is dropped.
-    expect(screen.queryByText("Rebuild History")).not.toBeInTheDocument();
+    // Secondary actions remain available.
+    expect(screen.getByRole("button", { name: /Rebuild History/i })).toBeInTheDocument();
     // The whole row links to the exact activity.
     const row = screen.getByText("CGX — Cineplex Inc.").closest("a");
     const url = new URL(row?.getAttribute("href") ?? "", "http://localhost");
@@ -452,6 +482,31 @@ describe("IssueDetailSheet", () => {
     );
   });
 
+  it("runs a secondary fix action from the diagnostic action list", async () => {
+    const user = userEvent.setup();
+    const onRunFixAction = vi.fn();
+    render(
+      <MemoryRouter>
+        <IssueDetailSheet
+          issue={diagnosticIssue}
+          open={true}
+          onOpenChange={noop}
+          onDismiss={noop}
+          onFix={noop}
+          onRunFixAction={onRunFixAction}
+          isDismissing={false}
+          isFixing={false}
+        />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Rebuild History/i }));
+
+    expect(onRunFixAction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "rebuild_account_history", payload: ["acc-1"] }),
+    );
+  });
+
   it("groups missing price diagnostics by asset with missing-date summary", () => {
     renderIssueSheet({
       ...diagnosticIssue,
@@ -588,6 +643,13 @@ describe("IssueDetailSheet", () => {
                     query: { activity: "buy-1", healthContext: "activity" },
                     label: "Review Transaction",
                   },
+                  {
+                    primary: false,
+                    kind: "fix",
+                    id: "rebuild_account_history",
+                    label: "Rebuild History",
+                    payload: ["acc-1"],
+                  },
                 ],
               },
               {
@@ -630,5 +692,6 @@ describe("IssueDetailSheet", () => {
       screen.getByText("This manual holding needs a price before it can be valued."),
     ).toBeInTheDocument();
     expect(screen.getByText("ALT — Private Fund")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Rebuild History/i })).toBeInTheDocument();
   });
 });
