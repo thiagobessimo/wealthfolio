@@ -102,6 +102,10 @@ export default function enable(ctx: AddonContext) {
         ui_functions.contains(&"router.add"),
         "router.add should be detected in hello world"
     );
+    assert!(
+        ui_functions.contains(&"onDisable"),
+        "onDisable should be detected in hello world"
+    );
 
     // Should NOT detect portfolio or market-data functions
     let portfolio_permission = detected_permissions
@@ -170,6 +174,10 @@ fn test_detect_addon_permissions() {
     assert!(
         ui_functions.contains(&"router.add"),
         "router.add should be detected"
+    );
+    assert!(
+        ui_functions.contains(&"onDisable"),
+        "onDisable should be detected"
     );
 
     // Should detect portfolio functions

@@ -360,7 +360,12 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
         (
             "ui",
             "ui",
-            vec!["sidebar.addItem", "router.add", "navigation.navigate"],
+            vec![
+                "sidebar.addItem",
+                "router.add",
+                "navigation.navigate",
+                "onDisable",
+            ],
             "User interface and navigation",
         ),
     ];
@@ -439,6 +444,8 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
                     // Special patterns for non-API functions
                     let simple_patterns = if *category == "ui" {
                         vec![
+                            format!(".{}(", function), // ctx.onDisable( or minified e.onDisable(
+                            format!("{}(", function),  // onDisable(
                             format!("ctx.{}(", function), // ctx.onDisable(
                         ]
                     } else {

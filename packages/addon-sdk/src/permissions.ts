@@ -219,7 +219,7 @@ export const PERMISSION_CATEGORIES: PermissionCategory[] = [
     id: 'ui',
     name: 'User Interface',
     description: 'Access to modify navigation and add UI components',
-    functions: ['sidebar.addItem', 'router.add', 'navigation.navigate'],
+    functions: ['sidebar.addItem', 'router.add', 'navigation.navigate', 'onDisable'],
     riskLevel: 'low',
   },
 ];
