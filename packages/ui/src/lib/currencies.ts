@@ -163,19 +163,18 @@ export const worldCurrencies = [
 ];
 
 export const quoteUnitCurrencies = [
-  { label: "British pence (GBp)", value: "GBp", major: "GBP", symbol: "p", factor: 0.01 },
-  { label: "British pence (GBX)", value: "GBX", major: "GBP", symbol: "p", factor: 0.01 },
-  { label: "Israeli agorot (ILA)", value: "ILA", major: "ILS", symbol: "ag", factor: 0.01 },
-  { label: "US cents (USX)", value: "USX", major: "USD", symbol: "c", factor: 0.01 },
+  { label: "British pence (GBp)", value: "GBp", major: "GBP", symbol: "p" },
+  { label: "British pence (GBX)", value: "GBX", major: "GBP", symbol: "p" },
+  { label: "Israeli agorot (ILA)", value: "ILA", major: "ILS", symbol: "ag" },
+  { label: "US cents (USX)", value: "USX", major: "USD", symbol: "c" },
   {
     label: "South African cents (ZAc)",
     value: "ZAc",
     major: "ZAR",
     symbol: "c",
-    factor: 0.01,
     aliases: ["ZAC"],
   },
-  { label: "Kuwaiti fils (KWF)", value: "KWF", major: "KWD", symbol: "fils", factor: 0.001 },
+  { label: "Kuwaiti fils (KWF)", value: "KWF", major: "KWD", symbol: "fils" },
 ] as const;
 
 export const quoteCurrencies = [...worldCurrencies, ...quoteUnitCurrencies];

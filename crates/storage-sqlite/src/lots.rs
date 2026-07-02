@@ -899,7 +899,7 @@ fn transaction_lot_view_row(
     let original_quantity = parse_decimal(&row.original_quantity);
     let currency = resolve_currency(&[row.currency.as_str(), row.base_currency.as_str()]);
     let base_currency = non_empty_currency(&row.base_currency);
-    let display_currency = normalize_currency_code(&currency).to_string();
+    let valuation_currency = normalize_currency_code(&currency).to_string();
     let cost_basis = parse_decimal(&row.remaining_cost_basis);
     let cost_basis_base = parse_decimal(&row.remaining_cost_basis_base);
     let unit_cost = parse_decimal(&row.cost_per_unit);
@@ -920,7 +920,7 @@ fn transaction_lot_view_row(
         source: AssetLotSource::TransactionLot,
         currency: currency.clone(),
         base_currency,
-        display_currency,
+        valuation_currency,
         quantity: remaining_quantity * split_ratio,
         original_quantity,
         remaining_quantity,
@@ -930,10 +930,8 @@ fn transaction_lot_view_row(
         fees,
         taxes,
         taxes_base: Some(taxes_base),
-        display_unit_cost: normalize_lot_money(unit_cost, &currency),
-        display_cost_basis: normalize_lot_money(cost_basis, &currency),
-        display_fees: normalize_lot_money(fees, &currency),
-        display_taxes: normalize_lot_money(taxes, &currency),
+        valuation_unit_cost: normalize_lot_money(unit_cost, &currency),
+        valuation_cost_basis: normalize_lot_money(cost_basis, &currency),
         fx_rate_to_base: Some(parse_decimal(&row.fx_rate_to_base)),
         split_ratio,
         contract_multiplier,
@@ -946,11 +944,9 @@ fn transaction_lot_view_row(
         disposal_cost_basis_base,
         realized_pnl,
         realized_pnl_base,
-        display_disposal_proceeds: disposal_proceeds
+        valuation_disposal_cost_basis: disposal_cost_basis
             .map(|amount| normalize_lot_money(amount, &currency)),
-        display_disposal_cost_basis: disposal_cost_basis
-            .map(|amount| normalize_lot_money(amount, &currency)),
-        display_realized_pnl: realized_pnl.map(|amount| normalize_lot_money(amount, &currency)),
+        valuation_realized_pnl: realized_pnl.map(|amount| normalize_lot_money(amount, &currency)),
     }
 }
 
@@ -964,7 +960,7 @@ fn snapshot_position_view_row(
     asset_id: &str,
 ) -> AssetLotView {
     let currency = resolve_currency(&[currency, snapshot.currency.as_str()]);
-    let display_currency = normalize_currency_code(&currency).to_string();
+    let valuation_currency = normalize_currency_code(&currency).to_string();
 
     AssetLotView {
         id: format!(
@@ -977,7 +973,7 @@ fn snapshot_position_view_row(
         source: AssetLotSource::SnapshotPosition,
         currency: currency.clone(),
         base_currency: None,
-        display_currency,
+        valuation_currency,
         quantity,
         original_quantity: quantity,
         remaining_quantity: quantity,
@@ -987,10 +983,8 @@ fn snapshot_position_view_row(
         fees: Decimal::ZERO,
         taxes: Decimal::ZERO,
         taxes_base: None,
-        display_unit_cost: normalize_lot_money(average_cost, &currency),
-        display_cost_basis: normalize_lot_money(total_cost_basis, &currency),
-        display_fees: Decimal::ZERO,
-        display_taxes: Decimal::ZERO,
+        valuation_unit_cost: normalize_lot_money(average_cost, &currency),
+        valuation_cost_basis: normalize_lot_money(total_cost_basis, &currency),
         fx_rate_to_base: None,
         split_ratio: Decimal::ONE,
         contract_multiplier,
@@ -1003,9 +997,8 @@ fn snapshot_position_view_row(
         disposal_cost_basis_base: None,
         realized_pnl: None,
         realized_pnl_base: None,
-        display_disposal_proceeds: None,
-        display_disposal_cost_basis: None,
-        display_realized_pnl: None,
+        valuation_disposal_cost_basis: None,
+        valuation_realized_pnl: None,
     }
 }
 
@@ -1463,14 +1456,12 @@ mod tests {
         let row = &rows[0];
         assert_eq!(row.currency, "GBp");
         assert_eq!(row.base_currency.as_deref(), Some("USD"));
-        assert_eq!(row.display_currency, "GBP");
+        assert_eq!(row.valuation_currency, "GBP");
         assert_eq!(row.unit_cost, dec("556.765"));
         assert_eq!(row.cost_basis, dec("28395.015"));
         assert_eq!(row.cost_basis_base, Some(dec("354.9376875")));
-        assert_eq!(row.display_unit_cost, dec("5.56765"));
-        assert_eq!(row.display_cost_basis, dec("283.95015"));
-        assert_eq!(row.display_fees, dec("1"));
-        assert_eq!(row.display_taxes, dec("0.50"));
+        assert_eq!(row.valuation_unit_cost, dec("5.56765"));
+        assert_eq!(row.valuation_cost_basis, dec("283.95015"));
     }
 
     #[tokio::test]
@@ -1974,9 +1965,9 @@ mod tests {
         assert_eq!(snapshot_row.unit_cost, Decimal::from(200));
         assert_eq!(snapshot_row.cost_basis, Decimal::from(2400));
         assert_eq!(snapshot_row.currency, "USD");
-        assert_eq!(snapshot_row.display_currency, "USD");
-        assert_eq!(snapshot_row.display_unit_cost, Decimal::from(200));
-        assert_eq!(snapshot_row.display_cost_basis, Decimal::from(2400));
+        assert_eq!(snapshot_row.valuation_currency, "USD");
+        assert_eq!(snapshot_row.valuation_unit_cost, Decimal::from(200));
+        assert_eq!(snapshot_row.valuation_cost_basis, Decimal::from(2400));
         assert_eq!(snapshot_row.contract_multiplier, Decimal::ONE);
         assert_eq!(snapshot_row.snapshot_date.as_deref(), Some("2026-05-20"));
     }
@@ -2014,11 +2005,11 @@ mod tests {
         let row = &rows[0];
         assert_eq!(row.source, AssetLotSource::SnapshotPosition);
         assert_eq!(row.currency, "GBp");
-        assert_eq!(row.display_currency, "GBP");
+        assert_eq!(row.valuation_currency, "GBP");
         assert_eq!(row.unit_cost, dec("556.765"));
         assert_eq!(row.cost_basis, dec("28395.015"));
-        assert_eq!(row.display_unit_cost, dec("5.56765"));
-        assert_eq!(row.display_cost_basis, dec("283.95015"));
+        assert_eq!(row.valuation_unit_cost, dec("5.56765"));
+        assert_eq!(row.valuation_cost_basis, dec("283.95015"));
     }
 
     #[tokio::test]
@@ -2107,13 +2098,12 @@ mod tests {
         let rows = repo.get_asset_lot_view("AAPL", false).await.unwrap();
         let row = rows.iter().find(|row| row.id == "closed-lot").unwrap();
         assert_eq!(row.currency, "GBp");
-        assert_eq!(row.display_currency, "GBP");
+        assert_eq!(row.valuation_currency, "GBP");
         assert_eq!(row.disposal_proceeds, Some(dec("31000")));
         assert_eq!(row.disposal_cost_basis, Some(dec("28395.015")));
         assert_eq!(row.realized_pnl, Some(dec("2604.985")));
-        assert_eq!(row.display_disposal_proceeds, Some(dec("310")));
-        assert_eq!(row.display_disposal_cost_basis, Some(dec("283.95015")));
-        assert_eq!(row.display_realized_pnl, Some(dec("26.04985")));
+        assert_eq!(row.valuation_disposal_cost_basis, Some(dec("283.95015")));
+        assert_eq!(row.valuation_realized_pnl, Some(dec("26.04985")));
     }
 
     #[tokio::test]

@@ -36,14 +36,14 @@ struct AssetProfileResponse {
     #[serde(flatten)]
     asset: CoreAsset,
     #[serde(skip_serializing_if = "Option::is_none")]
-    display_market_price: Option<Decimal>,
+    valuation_market_price: Option<Decimal>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    display_market_currency: Option<String>,
+    valuation_market_currency: Option<String>,
 }
 
 impl AssetProfileResponse {
     fn new(asset: CoreAsset, quote: Option<wealthfolio_core::quotes::Quote>) -> Self {
-        let (display_market_price, display_market_currency) = quote
+        let (valuation_market_price, valuation_market_currency) = quote
             .map(|quote| {
                 let (amount, currency) = normalize_amount(quote.close, &quote.currency);
                 (Some(amount), Some(currency.to_string()))
@@ -52,8 +52,8 @@ impl AssetProfileResponse {
 
         Self {
             asset,
-            display_market_price,
-            display_market_currency,
+            valuation_market_price,
+            valuation_market_currency,
         }
     }
 }
@@ -164,14 +164,14 @@ mod tests {
         };
 
         let response = AssetProfileResponse::new(asset, Some(quote));
-        assert_eq!(response.display_market_price, Some(Decimal::new(565, 2)));
-        assert_eq!(response.display_market_currency.as_deref(), Some("GBP"));
+        assert_eq!(response.valuation_market_price, Some(Decimal::new(565, 2)));
+        assert_eq!(response.valuation_market_currency.as_deref(), Some("GBP"));
 
         let value = serde_json::to_value(response).unwrap();
         assert_eq!(value["quoteCcy"], serde_json::json!("GBp"));
-        assert_eq!(value["displayMarketCurrency"], serde_json::json!("GBP"));
+        assert_eq!(value["valuationMarketCurrency"], serde_json::json!("GBP"));
         assert_eq!(
-            json_decimal(&value["displayMarketPrice"]),
+            json_decimal(&value["valuationMarketPrice"]),
             Decimal::new(565, 2)
         );
     }

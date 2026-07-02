@@ -48,13 +48,6 @@ import ActivityTable from "@/pages/activity/components/activity-table/activity-t
 import ActivityTableMobile from "@/pages/activity/components/activity-table/activity-table-mobile";
 import { MobileActivityForm } from "@/pages/activity/components/mobile-forms/mobile-activity-form";
 import { useActivityActionDialogs } from "@/pages/activity/hooks/use-activity-action-dialogs";
-import {
-  normalizeQuoteForDisplay,
-  normalizeQuoteHistoryForDisplay,
-  resolveBackendMarketQuoteFallback,
-  resolveQuoteDisplayFactor,
-  sumDisplayIncomeActivities,
-} from "./asset-profile-calculations";
 import { useAssetProfile } from "./hooks/use-asset-profile";
 import { useAssetProfileMutations } from "./hooks/use-asset-profile-mutations";
 import { RefreshQuotesConfirmDialog } from "./refresh-quotes-confirm-dialog";
@@ -539,11 +532,10 @@ export const AssetProfilePage = () => {
     const totalGainAmount = holding?.totalGain?.local ?? 0;
     const totalGainPercent = holding?.totalGainPct ?? 0;
     const calculatedAt = holding?.asOfDate;
-    const backendQuote = resolveBackendMarketQuoteFallback({
-      asset,
-      instrumentCurrency: instrument?.currency,
-      baseCurrency,
-    });
+    const valuationMarketPrice =
+      asset?.valuationMarketPrice != null ? Number(asset.valuationMarketPrice) : 0;
+    const valuationMarketCurrency =
+      asset?.valuationMarketCurrency ?? instrument?.currency ?? asset?.quoteCcy ?? baseCurrency;
 
     // Legacy data is in asset.metadata.legacy (for migration purposes)
     // New data should come from taxonomies
@@ -568,46 +560,15 @@ export const AssetProfilePage = () => {
       attributes: null,
       createdAt: holding?.openDate ? new Date(holding.openDate) : new Date(),
       updatedAt: new Date(),
-      currency: holding?.localCurrency ?? backendQuote.currency,
+      currency: holding?.localCurrency ?? valuationMarketCurrency,
       sectors: JSON.stringify(parseJsonField(legacy?.sectors) ?? []),
       url: null,
-      marketPrice: holding?.price ?? backendQuote.marketPrice,
+      marketPrice: holding?.price ?? valuationMarketPrice,
       totalGainAmount,
       totalGainPercent,
       calculatedAt,
     };
   }, [holding, assetProfile, assetId, baseCurrency]);
-
-  const quoteDisplayCurrency = profile?.currency ?? baseCurrency;
-  const quoteDisplayFactor = useMemo(
-    () =>
-      resolveQuoteDisplayFactor({
-        quote,
-        displayCurrency: quoteDisplayCurrency,
-        marketPrice: Number(profile?.marketPrice ?? 0),
-      }),
-    [quote, quoteDisplayCurrency, profile?.marketPrice],
-  );
-  const displayQuote = useMemo(
-    () =>
-      quote
-        ? normalizeQuoteForDisplay({
-            quote,
-            displayCurrency: quoteDisplayCurrency,
-            quoteDisplayFactor,
-          })
-        : null,
-    [quote, quoteDisplayCurrency, quoteDisplayFactor],
-  );
-  const displayQuoteHistory = useMemo(
-    () =>
-      normalizeQuoteHistoryForDisplay({
-        quoteHistory: quoteHistory ?? [],
-        displayCurrency: quoteDisplayCurrency,
-        quoteDisplayFactor,
-      }),
-    [quoteHistory, quoteDisplayCurrency, quoteDisplayFactor],
-  );
 
   const symbolHolding = useMemo((): AssetDetailData | null => {
     const instrument = holding?.instrument;
@@ -618,7 +579,7 @@ export const AssetProfilePage = () => {
     const displayCurrency =
       normalizeCurrency(
         holding?.localCurrency ??
-          asset?.displayMarketCurrency ??
+          asset?.valuationMarketCurrency ??
           quote?.currency ??
           instrument?.currency ??
           asset?.quoteCcy ??
@@ -634,17 +595,17 @@ export const AssetProfilePage = () => {
         ? Number(holding.costBasis.local) / costUnits
         : 0;
 
-    const quoteData = displayQuote
+    const quoteData = quote
       ? {
           quote: {
-            open: displayQuote.open,
-            high: displayQuote.high,
-            low: displayQuote.low,
-            volume: displayQuote.volume,
-            close: displayQuote.close,
-            adjclose: displayQuote.adjclose,
+            open: quote.open,
+            high: quote.high,
+            low: quote.low,
+            volume: quote.volume,
+            close: quote.close,
+            adjclose: quote.adjclose,
           },
-          quoteCurrency: displayQuote.currency ?? null,
+          quoteCurrency: quote.currency ?? null,
         }
       : null;
 
@@ -668,21 +629,24 @@ export const AssetProfilePage = () => {
         (activity.activityType === ActivityType.DIVIDEND ||
           activity.activityType === ActivityType.INTEREST),
     );
-    const fallbackIncome = sumDisplayIncomeActivities({
-      activities: incomeActivities,
-      displayCurrency,
-      quoteDisplayFactor,
-    });
+    const fallbackIncome = incomeActivities.reduce<number | null>((sum, activity) => {
+      if (sum == null) return null;
+      if (activity.currency.trim().toUpperCase() !== displayCurrency.trim().toUpperCase()) {
+        return null;
+      }
+      const amount = Number(activity.amount ?? 0);
+      return Number.isFinite(amount) ? sum + amount : sum;
+    }, 0);
     const income = holding?.income?.local != null ? Number(holding.income.local) : fallbackIncome;
     const realizedLots = assetLots.filter(
-      (lot) => lot.source === "TRANSACTION_LOT" && lot.displayRealizedPnl != null,
+      (lot) => lot.source === "TRANSACTION_LOT" && lot.valuationRealizedPnl != null,
     );
     const realizedPnlFromLots = realizedLots.reduce(
-      (sum, lot) => sum + Number(lot.displayRealizedPnl ?? 0),
+      (sum, lot) => sum + Number(lot.valuationRealizedPnl ?? 0),
       0,
     );
     const realizedCostBasisFromLots = realizedLots.reduce(
-      (sum, lot) => sum + Number(lot.displayDisposalCostBasis ?? 0),
+      (sum, lot) => sum + Number(lot.valuationDisposalCostBasis ?? 0),
       0,
     );
     const realizedPnl =
@@ -762,9 +726,7 @@ export const AssetProfilePage = () => {
   }, [
     holding,
     quote,
-    displayQuote,
     quoteHistory,
-    quoteDisplayFactor,
     assetActivities,
     assetLots,
     assetProfile,
@@ -1395,7 +1357,7 @@ export const AssetProfilePage = () => {
                   marketPrice={profile.marketPrice}
                   totalGainAmount={profile.totalGainAmount}
                   totalGainPercent={profile.totalGainPercent}
-                  quoteHistory={displayQuoteHistory}
+                  quoteHistory={quoteHistory ?? []}
                   className={`col-span-1 ${symbolHolding ? "md:col-span-2" : "md:col-span-3"}`}
                 />
                 {symbolHolding && (
@@ -1423,7 +1385,7 @@ export const AssetProfilePage = () => {
                   marketPrice={profile.marketPrice}
                   totalGainAmount={profile.totalGainAmount}
                   totalGainPercent={profile.totalGainPercent}
-                  quoteHistory={displayQuoteHistory}
+                  quoteHistory={quoteHistory ?? []}
                   className={`col-span-1 ${symbolHolding ? "md:col-span-2" : "md:col-span-3"}`}
                 />
                 {symbolHolding && (

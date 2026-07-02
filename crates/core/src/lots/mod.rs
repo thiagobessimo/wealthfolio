@@ -338,8 +338,8 @@ pub struct AssetLotView {
     pub currency: String,
     /// User base currency for *_base fields when available.
     pub base_currency: Option<String>,
-    /// Currency used by display_* fields after minor-unit normalization.
-    pub display_currency: String,
+    /// Currency used by valuation_* fields after minor-unit normalization.
+    pub valuation_currency: String,
     /// Effective current quantity. For transaction lots this is
     /// `remaining_quantity * split_ratio`; snapshot positions are already
     /// aggregate current quantities.
@@ -356,10 +356,8 @@ pub struct AssetLotView {
     pub fees: Decimal,
     pub taxes: Decimal,
     pub taxes_base: Option<Decimal>,
-    pub display_unit_cost: Decimal,
-    pub display_cost_basis: Decimal,
-    pub display_fees: Decimal,
-    pub display_taxes: Decimal,
+    pub valuation_unit_cost: Decimal,
+    pub valuation_cost_basis: Decimal,
     pub fx_rate_to_base: Option<Decimal>,
     pub split_ratio: Decimal,
     pub contract_multiplier: Decimal,
@@ -372,9 +370,8 @@ pub struct AssetLotView {
     pub disposal_cost_basis_base: Option<Decimal>,
     pub realized_pnl: Option<Decimal>,
     pub realized_pnl_base: Option<Decimal>,
-    pub display_disposal_proceeds: Option<Decimal>,
-    pub display_disposal_cost_basis: Option<Decimal>,
-    pub display_realized_pnl: Option<Decimal>,
+    pub valuation_disposal_cost_basis: Option<Decimal>,
+    pub valuation_realized_pnl: Option<Decimal>,
 }
 
 // The cost_basis_method field is generation provenance for inventory rows.

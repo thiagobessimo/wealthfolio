@@ -139,9 +139,9 @@ interface ComputedLot {
   effectiveQuantity: number;
   marketValue: number;
   aggregateMarketValue: number;
-  displayCurrency: string;
-  displayUnitCost: number | null;
-  displayCostBasis: number | null;
+  valuationCurrency: string;
+  valuationUnitCost: number | null;
+  valuationCostBasis: number | null;
   gainLossAmount: number | null;
   gainLossPercent: number | null;
   canAggregate: boolean;
@@ -198,7 +198,7 @@ function groupLotsByAccount(
         .map((lot) => computeLot(lot, currency, marketPrice, contractMultiplier));
       const shares = computed.reduce((acc, item) => acc + item.remainingQuantity, 0);
       const costBasis = computed.reduce(
-        (acc, item) => acc + (item.canAggregate ? (item.displayCostBasis ?? 0) : 0),
+        (acc, item) => acc + (item.canAggregate ? (item.valuationCostBasis ?? 0) : 0),
         0,
       );
       const marketValue = computed.reduce((acc, item) => acc + item.aggregateMarketValue, 0);
@@ -234,17 +234,17 @@ function computeLot(
   const effectiveQuantity = isSnapshot ? lot.quantity : remainingQuantity * splitRatio;
   const isValuable = !lot.isClosed;
   const marketValue = effectiveQuantity * marketPrice * rowContractMultiplier;
-  const displayCurrency = lot.displayCurrency || currency;
-  const displayUnitCost = finiteAmount(lot.displayUnitCost);
-  const displayCostBasis = finiteAmount(lot.displayCostBasis);
+  const valuationCurrency = lot.valuationCurrency || currency;
+  const valuationUnitCost = finiteAmount(lot.valuationUnitCost);
+  const valuationCostBasis = finiteAmount(lot.valuationCostBasis);
   const canAggregate =
-    isValuable && displayCostBasis != null && sameCurrency(displayCurrency, currency);
+    isValuable && valuationCostBasis != null && sameCurrency(valuationCurrency, currency);
   const aggregateMarketValue = canAggregate ? marketValue : 0;
   const gainLossAmount =
-    canAggregate && displayCostBasis != null ? marketValue - displayCostBasis : null;
+    canAggregate && valuationCostBasis != null ? marketValue - valuationCostBasis : null;
   const gainLossPercent =
-    gainLossAmount != null && displayCostBasis != null && displayCostBasis !== 0
-      ? gainLossAmount / displayCostBasis
+    gainLossAmount != null && valuationCostBasis != null && valuationCostBasis !== 0
+      ? gainLossAmount / valuationCostBasis
       : null;
   const hasPartialSell =
     !isSnapshot && lot.originalQuantity > 0 && lot.remainingQuantity < lot.originalQuantity;
@@ -255,9 +255,9 @@ function computeLot(
     effectiveQuantity,
     marketValue,
     aggregateMarketValue,
-    displayCurrency,
-    displayUnitCost,
-    displayCostBasis,
+    valuationCurrency,
+    valuationUnitCost,
+    valuationCostBasis,
     gainLossAmount,
     gainLossPercent,
     canAggregate,
@@ -605,18 +605,18 @@ function AssetLotTableRow({ item, currency }: { item: ComputedLot; currency: str
         )}
       </TableCell>
       <TableCell className="text-right tabular-nums">
-        {item.displayUnitCost != null ? (
-          <PrivacyAmount value={item.displayUnitCost} currency={item.displayCurrency} />
+        {item.valuationUnitCost != null ? (
+          <PrivacyAmount value={item.valuationUnitCost} currency={item.valuationCurrency} />
         ) : (
           "—"
         )}
         {!isSnapshot && lot.splitRatio !== 1 && (
           <div className="text-muted-foreground text-[11px]">
             adj.{" "}
-            {item.displayUnitCost != null ? (
+            {item.valuationUnitCost != null ? (
               <PrivacyAmount
-                value={item.displayUnitCost / lot.splitRatio}
-                currency={item.displayCurrency}
+                value={item.valuationUnitCost / lot.splitRatio}
+                currency={item.valuationCurrency}
               />
             ) : (
               "—"
@@ -625,8 +625,8 @@ function AssetLotTableRow({ item, currency }: { item: ComputedLot; currency: str
         )}
       </TableCell>
       <TableCell className="text-right tabular-nums">
-        {item.displayCostBasis != null ? (
-          <PrivacyAmount value={item.displayCostBasis} currency={item.displayCurrency} />
+        {item.valuationCostBasis != null ? (
+          <PrivacyAmount value={item.valuationCostBasis} currency={item.valuationCurrency} />
         ) : (
           "—"
         )}
@@ -682,16 +682,16 @@ function AssetLotMobileRow({ item, currency }: { item: ComputedLot; currency: st
         </span>
         <span>Unit Cost</span>
         <span className="text-foreground text-right tabular-nums">
-          {item.displayUnitCost != null ? (
-            <PrivacyAmount value={item.displayUnitCost} currency={item.displayCurrency} />
+          {item.valuationUnitCost != null ? (
+            <PrivacyAmount value={item.valuationUnitCost} currency={item.valuationCurrency} />
           ) : (
             "—"
           )}
         </span>
         <span>Cost Basis</span>
         <span className="text-foreground text-right tabular-nums">
-          {item.displayCostBasis != null ? (
-            <PrivacyAmount value={item.displayCostBasis} currency={item.displayCurrency} />
+          {item.valuationCostBasis != null ? (
+            <PrivacyAmount value={item.valuationCostBasis} currency={item.valuationCurrency} />
           ) : (
             "—"
           )}

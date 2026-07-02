@@ -13,7 +13,7 @@ const ctyLot: AssetLotView = {
   source: "TRANSACTION_LOT",
   currency: "GBp",
   baseCurrency: "GBP",
-  displayCurrency: "GBP",
+  valuationCurrency: "GBP",
   quantity: 51,
   originalQuantity: 51,
   remainingQuantity: 51,
@@ -23,10 +23,8 @@ const ctyLot: AssetLotView = {
   fees: 0,
   taxes: 0,
   taxesBase: 0,
-  displayUnitCost: 5.56765,
-  displayCostBasis: 283.95015,
-  displayFees: 0,
-  displayTaxes: 0,
+  valuationUnitCost: 5.56765,
+  valuationCostBasis: 283.95015,
   fxRateToBase: 0.01,
   splitRatio: 1,
   contractMultiplier: 1,
@@ -39,13 +37,12 @@ const ctyLot: AssetLotView = {
   disposalCostBasisBase: null,
   realizedPnl: null,
   realizedPnlBase: null,
-  displayDisposalProceeds: null,
-  displayDisposalCostBasis: null,
-  displayRealizedPnl: null,
+  valuationDisposalCostBasis: null,
+  valuationRealizedPnl: null,
 };
 
 describe("AssetLotsTable", () => {
-  it("uses display-normalized lot values for GBp lots", () => {
+  it("uses valuation-normalized lot values for GBp lots", () => {
     render(<AssetLotsTable lots={[ctyLot]} currency="GBP" marketPrice={5.65} />);
 
     expect(screen.getAllByText("£283.95").length).toBeGreaterThan(0);
@@ -58,10 +55,10 @@ describe("AssetLotsTable", () => {
     expect(screen.queryByText("£556.77")).not.toBeInTheDocument();
   });
 
-  it("excludes lots without display cost from both cost and market aggregates", () => {
+  it("excludes lots without valuation cost from both cost and market aggregates", () => {
     render(
       <AssetLotsTable
-        lots={[{ ...ctyLot, id: "cty-lot-without-display-cost", displayCostBasis: null }]}
+        lots={[{ ...ctyLot, id: "cty-lot-without-valuation-cost", valuationCostBasis: null }]}
         currency="GBP"
         marketPrice={5.65}
       />,
