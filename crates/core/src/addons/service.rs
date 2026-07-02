@@ -1,14 +1,32 @@
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
+use serde_json::json;
 
 use super::addon_traits::AddonServiceTrait;
 use super::models::*;
+use super::network::{perform_addon_network_request, AddonNetworkRequest, AddonNetworkResponse};
 
 // Constants
 pub const ADDON_STORE_API_BASE_URL: &str = "https://wealthfolio.app/api/addons";
+const MAX_ADDON_ARCHIVE_ENTRIES: usize = 256;
+const MAX_ADDON_ARCHIVE_FILE_SIZE: u64 = 5 * 1024 * 1024;
+const MAX_ADDON_ARCHIVE_TOTAL_SIZE: u64 = 25 * 1024 * 1024;
+const MAX_ADDON_ARCHIVE_COMPRESSED_SIZE: usize = 50 * 1024 * 1024;
+
+#[derive(Clone)]
+struct AddonArchiveFile {
+    name: String,
+    content: Vec<u8>,
+    is_main: bool,
+}
+
+struct ExtractedAddonArchive {
+    metadata: AddonManifest,
+    files: Vec<AddonArchiveFile>,
+}
 
 /// Helper function to create a request with common headers
 fn create_request_with_headers(
@@ -83,8 +101,39 @@ pub fn ensure_addons_directory(base_dir: impl AsRef<Path>) -> Result<PathBuf, St
     Ok(addons_dir)
 }
 
+pub fn validate_addon_id(addon_id: &str) -> Result<(), String> {
+    if addon_id.is_empty() {
+        return Err("Invalid addon id: id is empty".to_string());
+    }
+    if addon_id.len() > 64 {
+        return Err("Invalid addon id: id must be 64 characters or fewer".to_string());
+    }
+    if addon_id == "." || addon_id == ".." || addon_id.chars().all(|c| c == '.') {
+        return Err("Invalid addon id: dot-only ids are not allowed".to_string());
+    }
+    if addon_id == "staging" {
+        return Err("Invalid addon id: 'staging' is reserved".to_string());
+    }
+
+    let mut chars = addon_id.chars();
+    let Some(first) = chars.next() else {
+        return Err("Invalid addon id: id is empty".to_string());
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return Err("Invalid addon id: id must start with a lowercase letter or digit".to_string());
+    }
+
+    if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err("Invalid addon id: use lowercase letters, digits, '.', '_' or '-'".to_string());
+    }
+
+    Ok(())
+}
+
 /// Get addon directory path for a specific addon
 pub fn get_addon_path(base_dir: impl AsRef<Path>, addon_id: &str) -> Result<PathBuf, String> {
+    validate_addon_id(addon_id)?;
     let addons_dir = ensure_addons_directory(base_dir)?;
     Ok(addons_dir.join(addon_id))
 }
@@ -262,7 +311,7 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
         (
             "secrets",
             "secrets",
-            vec!["set", "get", "delete"],
+            vec!["set", "get", "use", "delete"],
             "Access to secure storage for addon secrets",
         ),
         (
@@ -297,9 +346,21 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
             "Access to application events",
         ),
         (
+            "query",
+            "query",
+            vec!["invalidateQueries", "refetchQueries"],
+            "Access to refresh host application data",
+        ),
+        (
+            "network",
+            "network",
+            vec!["request"],
+            "Access to declared external HTTPS hosts",
+        ),
+        (
             "ui",
             "ui",
-            vec!["sidebar.addItem", "router.add"],
+            vec!["sidebar.addItem", "router.add", "navigation.navigate"],
             "User interface and navigation",
         ),
     ];
@@ -444,6 +505,16 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
                 }
             }
         }
+
+        if file.content.contains(".network.request(")
+            && file.content.contains("auth")
+            && file.content.contains("secretKey")
+        {
+            category_functions
+                .entry("secrets".to_string())
+                .or_default()
+                .push("use".to_string());
+        }
     }
 
     // Create permission objects for each category with detected functions
@@ -493,16 +564,99 @@ pub fn detect_addon_permissions(addon_files: &[AddonFile]) -> Vec<AddonPermissio
     detected_permissions
 }
 
-pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, String> {
+fn merge_detected_permissions(
+    declared_permissions: Option<&[AddonPermission]>,
+    detected_permissions: Vec<AddonPermission>,
+) -> Vec<AddonPermission> {
+    let mut merged_permissions = Vec::new();
+
+    if let Some(declared_permissions) = declared_permissions {
+        for permission in declared_permissions {
+            merged_permissions.push(AddonPermission {
+                category: permission.category.clone(),
+                functions: permission.functions.clone(),
+                purpose: permission.purpose.clone(),
+            });
+        }
+    }
+
+    for detected_permission in detected_permissions {
+        if let Some(existing) = merged_permissions
+            .iter_mut()
+            .find(|permission| permission.category == detected_permission.category)
+        {
+            for detected_function in &detected_permission.functions {
+                if let Some(existing_function) = existing
+                    .functions
+                    .iter_mut()
+                    .find(|function| function.name == detected_function.name)
+                {
+                    existing_function.is_detected = true;
+                    existing_function.detected_at = detected_function.detected_at.clone();
+                } else {
+                    existing.functions.push(detected_function.clone());
+                }
+            }
+        } else {
+            merged_permissions.push(detected_permission);
+        }
+    }
+
+    merged_permissions
+}
+
+fn archive_file_to_addon_file(file: AddonArchiveFile) -> AddonFile {
+    AddonFile {
+        name: file.name,
+        content: String::from_utf8(file.content).unwrap_or_default(),
+        is_main: file.is_main,
+    }
+}
+
+fn archive_files_to_text_files(files: &[AddonArchiveFile]) -> Vec<AddonFile> {
+    files
+        .iter()
+        .filter_map(|file| {
+            String::from_utf8(file.content.clone())
+                .ok()
+                .map(|content| AddonFile {
+                    name: file.name.clone(),
+                    content,
+                    is_main: file.is_main,
+                })
+        })
+        .collect()
+}
+
+fn extract_addon_zip_archive(zip_data: Vec<u8>) -> Result<ExtractedAddonArchive, String> {
     use std::io::Cursor;
     use zip::ZipArchive;
 
+    if zip_data.is_empty() {
+        return Err("ZIP addon data is empty".to_string());
+    }
+    if zip_data.len() > MAX_ADDON_ARCHIVE_COMPRESSED_SIZE {
+        return Err(format!(
+            "ZIP addon is too large: {} bytes exceeds {} byte limit",
+            zip_data.len(),
+            MAX_ADDON_ARCHIVE_COMPRESSED_SIZE
+        ));
+    }
+
     let cursor = Cursor::new(zip_data);
     let mut archive = ZipArchive::new(cursor).map_err(|e| format!("Failed to read ZIP: {}", e))?;
+    if archive.len() > MAX_ADDON_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "ZIP addon has too many entries: {} exceeds {} entry limit",
+            archive.len(),
+            MAX_ADDON_ARCHIVE_ENTRIES
+        ));
+    }
 
     let mut files = Vec::new();
     let mut manifest_json: Option<String> = None;
     let mut main_file: Option<String> = None;
+    let mut total_uncompressed_size = 0u64;
 
     // Extract all files from ZIP
     for i in 0..archive.len() {
@@ -516,14 +670,48 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
 
         let file_name = file.name().to_string();
         validated_addon_archive_path(&file_name)?;
-        let mut contents = String::new();
 
-        file.read_to_string(&mut contents)
+        if file_name.ends_with(".map") {
+            log::debug!("Skipping addon source map '{}'", file_name);
+            continue;
+        }
+
+        let file_size = file.size();
+        if file_size > MAX_ADDON_ARCHIVE_FILE_SIZE {
+            return Err(format!(
+                "ZIP addon file '{}' is too large: {} bytes exceeds {} byte limit",
+                file_name, file_size, MAX_ADDON_ARCHIVE_FILE_SIZE
+            ));
+        }
+        total_uncompressed_size = total_uncompressed_size
+            .checked_add(file_size)
+            .ok_or_else(|| "ZIP addon uncompressed size overflowed".to_string())?;
+        if total_uncompressed_size > MAX_ADDON_ARCHIVE_TOTAL_SIZE {
+            return Err(format!(
+                "ZIP addon uncompressed size is too large: {} bytes exceeds {} byte limit",
+                total_uncompressed_size, MAX_ADDON_ARCHIVE_TOTAL_SIZE
+            ));
+        }
+
+        let mut contents = Vec::with_capacity(file_size.min(MAX_ADDON_ARCHIVE_FILE_SIZE) as usize);
+        let bytes_read = file
+            .by_ref()
+            .take(MAX_ADDON_ARCHIVE_FILE_SIZE + 1)
+            .read_to_end(&mut contents)
             .map_err(|e| format!("Failed to read file {}: {}", file_name, e))?;
+        if bytes_read as u64 > MAX_ADDON_ARCHIVE_FILE_SIZE {
+            return Err(format!(
+                "ZIP addon file '{}' exceeds {} byte limit",
+                file_name, MAX_ADDON_ARCHIVE_FILE_SIZE
+            ));
+        }
 
         // Check for manifest.json
         if file_name == "manifest.json" || file_name.ends_with("/manifest.json") {
-            manifest_json = Some(contents.clone());
+            manifest_json = Some(
+                String::from_utf8(contents.clone())
+                    .map_err(|e| format!("Failed to read manifest.json as UTF-8: {}", e))?,
+            );
         }
 
         // Check for main addon file (fallback detection)
@@ -537,7 +725,7 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
             main_file = Some(file_name.clone());
         }
 
-        files.push(AddonFile {
+        files.push(AddonArchiveFile {
             name: file_name,
             content: contents,
             is_main: false, // Will be set correctly after parsing manifest.json
@@ -576,8 +764,9 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
         "Starting permission detection for extracted addon: {}",
         metadata.id
     );
-    log::debug!("Number of files to analyze: {}", files.len());
-    for file in &files {
+    let permission_files = archive_files_to_text_files(&files);
+    log::debug!("Number of files to analyze: {}", permission_files.len());
+    for file in &permission_files {
         log::debug!(
             "File: {} (size: {} chars, is_main: {})",
             file.name,
@@ -586,7 +775,7 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
         );
     }
 
-    let detected_permissions = detect_addon_permissions(&files);
+    let detected_permissions = detect_addon_permissions(&permission_files);
     log::debug!(
         "Permission detection completed for extracted addon: {}",
         metadata.id
@@ -596,59 +785,8 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
         detected_permissions.len()
     );
 
-    // Merge declared and detected permissions (same logic as install_addon_zip)
-    let mut merged_permissions = Vec::new();
-
-    // First, add all declared permissions with their original flags preserved
-    if let Some(declared_perms) = &metadata.permissions {
-        for perm in declared_perms {
-            // Clone the permission and preserve all function flags
-            let mut cloned_functions = Vec::new();
-            for func in &perm.functions {
-                cloned_functions.push(FunctionPermission {
-                    name: func.name.clone(),
-                    is_declared: func.is_declared,
-                    is_detected: func.is_detected,
-                    detected_at: func.detected_at.clone(),
-                });
-            }
-
-            merged_permissions.push(AddonPermission {
-                category: perm.category.clone(),
-                functions: cloned_functions,
-                purpose: perm.purpose.clone(),
-            });
-        }
-    }
-
-    // Then, add detected permissions and merge with declared ones
-    for detected_perm in detected_permissions {
-        // Check if this category already exists in declared permissions
-        if let Some(existing) = merged_permissions
-            .iter_mut()
-            .find(|p| p.category == detected_perm.category)
-        {
-            // Merge detected functions with declared functions
-            for detected_func in &detected_perm.functions {
-                // Check if this function already exists in declared functions
-                if let Some(existing_func) = existing
-                    .functions
-                    .iter_mut()
-                    .find(|f| f.name == detected_func.name)
-                {
-                    // Mark existing declared function as also detected
-                    existing_func.is_detected = true;
-                    existing_func.detected_at = detected_func.detected_at.clone();
-                } else {
-                    // Add new detected function
-                    existing.functions.push(detected_func.clone());
-                }
-            }
-        } else {
-            // Add as detected-only permission category
-            merged_permissions.push(detected_perm);
-        }
-    }
+    let merged_permissions =
+        merge_detected_permissions(metadata.permissions.as_deref(), detected_permissions);
 
     // Create a metadata copy with merged permissions for the extracted addon
     let mut metadata_with_merged_permissions = metadata;
@@ -676,9 +814,21 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
         }
     }
 
-    Ok(ExtractedAddon {
+    Ok(ExtractedAddonArchive {
         metadata: metadata_with_merged_permissions,
         files,
+    })
+}
+
+pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, String> {
+    let extracted = extract_addon_zip_archive(zip_data)?;
+    Ok(ExtractedAddon {
+        metadata: extracted.metadata,
+        files: extracted
+            .files
+            .into_iter()
+            .map(archive_file_to_addon_file)
+            .collect(),
     })
 }
 
@@ -717,10 +867,54 @@ pub fn parse_manifest_json_metadata(manifest_content: &str) -> Result<AddonManif
             .collect()
     });
     let icon = raw_manifest["icon"].as_str().map(|s| s.to_string());
+    let network = if let Some(network_value) = raw_manifest.get("network") {
+        if network_value.is_null() {
+            None
+        } else {
+            let mut allowed_hosts = network_value["allowedHosts"]
+                .as_array()
+                .ok_or("Missing or invalid 'network.allowedHosts' field in manifest")?
+                .iter()
+                .map(|host| {
+                    host.as_str()
+                        .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+                        .filter(|s| !s.is_empty() && s.len() <= 253)
+                        .ok_or("Invalid network allowed host in manifest")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            allowed_hosts.sort();
+            allowed_hosts.dedup();
+            let mut approved_hosts = network_value["approvedHosts"]
+                .as_array()
+                .map(|hosts| {
+                    hosts
+                        .iter()
+                        .filter_map(|host| {
+                            host.as_str()
+                                .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+                        })
+                        .filter(|host| allowed_hosts.contains(host))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            approved_hosts.sort();
+            approved_hosts.dedup();
+            Some(AddonNetworkAccess {
+                allowed_hosts,
+                approved_hosts,
+            })
+        }
+    } else {
+        None
+    };
 
     // Validate required fields
     if main.is_none() {
         return Err("Missing 'main' field in manifest.json".to_string());
+    }
+    validate_addon_id(&id)?;
+    if let Some(main_path) = &main {
+        validated_addon_archive_path(main_path)?;
     }
 
     // Handle permissions - convert from legacy string array format to new FunctionPermission format
@@ -803,6 +997,7 @@ pub fn parse_manifest_json_metadata(manifest_content: &str) -> Result<AddonManif
         min_wealthfolio_version,
         keywords,
         icon,
+        network,
         installed_at: None,
         updated_at: None,
         source: None,
@@ -839,8 +1034,31 @@ pub fn read_addon_files_recursive(
                 .map_err(|e| format!("Failed to get relative path: {}", e))?;
             let relative_path_str = relative_path.to_string_lossy().to_string();
 
-            let content = fs::read_to_string(&file_path)
+            if relative_path_str.ends_with(".map") {
+                log::debug!("Skipping addon source map '{}'", relative_path_str);
+                continue;
+            }
+
+            let metadata = fs::metadata(&file_path).map_err(|e| {
+                format!("Failed to read file metadata {}: {}", relative_path_str, e)
+            })?;
+            if metadata.len() > MAX_ADDON_ARCHIVE_FILE_SIZE {
+                return Err(format!(
+                    "Addon file '{}' is too large: {} bytes exceeds {} byte limit",
+                    relative_path_str,
+                    metadata.len(),
+                    MAX_ADDON_ARCHIVE_FILE_SIZE
+                ));
+            }
+            let bytes = fs::read(&file_path)
                 .map_err(|e| format!("Failed to read file {}: {}", relative_path_str, e))?;
+            let content = match String::from_utf8(bytes) {
+                Ok(content) => content,
+                Err(_) => {
+                    log::debug!("Skipping non-UTF-8 addon asset '{}'", relative_path_str);
+                    continue;
+                }
+            };
 
             files.push(AddonFile {
                 name: relative_path_str,
@@ -859,6 +1077,7 @@ pub async fn check_addon_update_from_api(
     current_version: &str,
     instance_id: Option<&str>,
 ) -> Result<AddonUpdateCheckResult, String> {
+    validate_addon_id(addon_id)?;
     let api_url = format!(
         "{}/update-check?addonId={}&currentVersion={}",
         ADDON_STORE_API_BASE_URL, addon_id, current_version
@@ -879,6 +1098,28 @@ pub async fn check_addon_update_from_api(
 
 /// Download addon package from URL
 pub async fn download_addon_package(download_url: &str) -> Result<Vec<u8>, String> {
+    download_addon_package_verified(download_url, None).await
+}
+
+pub fn verify_addon_package_sha256(zip_data: &[u8], expected_sha256: &str) -> Result<(), String> {
+    let expected = expected_sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid addon package SHA-256 digest".to_string());
+    }
+
+    use sha2::{Digest, Sha256};
+    let actual = hex::encode(Sha256::digest(zip_data));
+    if actual != expected {
+        return Err("Addon package SHA-256 digest did not match".to_string());
+    }
+
+    Ok(())
+}
+
+pub async fn download_addon_package_verified(
+    download_url: &str,
+    expected_sha256: Option<&str>,
+) -> Result<Vec<u8>, String> {
     log::info!("Downloading addon package from URL: {}", download_url);
 
     let client = reqwest::Client::new();
@@ -942,6 +1183,14 @@ pub async fn download_addon_package(download_url: &str) -> Result<Vec<u8>, Strin
         download_url
     );
 
+    if let Some(expected_sha256) = expected_sha256 {
+        verify_addon_package_sha256(&zip_data, expected_sha256)?;
+        log::info!(
+            "Verified SHA-256 digest for addon package: {}",
+            download_url
+        );
+    }
+
     Ok(zip_data)
 }
 
@@ -978,6 +1227,7 @@ pub async fn download_addon_from_store(
     addon_id: &str,
     instance_id: &str,
 ) -> Result<Vec<u8>, String> {
+    validate_addon_id(addon_id)?;
     let download_api_url = format!("{}/{}/download", ADDON_STORE_API_BASE_URL, addon_id);
 
     log::info!(
@@ -1059,6 +1309,10 @@ pub async fn download_addon_from_store(
             .get("downloadUrl")
             .and_then(|v| v.as_str())
             .ok_or("Download API response missing downloadUrl field")?;
+        let expected_sha256 = download_response
+            .get("sha256")
+            .or_else(|| download_response.get("checksumSha256"))
+            .and_then(|v| v.as_str());
 
         log::info!(
             "Got download URL for addon '{}': {}",
@@ -1067,9 +1321,14 @@ pub async fn download_addon_from_store(
         );
 
         // Now download the actual file
-        return download_addon_package(actual_download_url).await;
+        return download_addon_package_verified(actual_download_url, expected_sha256).await;
     } else {
         log::debug!("Response is binary data, treating as direct ZIP download");
+        let expected_sha256 = response
+            .headers()
+            .get("x-addon-sha256")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
 
         // Download the addon package directly (GET request returns the file)
         let zip_data = response
@@ -1104,6 +1363,11 @@ pub async fn download_addon_from_store(
             }
         }
 
+        if let Some(expected_sha256) = expected_sha256 {
+            verify_addon_package_sha256(&zip_data, &expected_sha256)?;
+            log::info!("Verified SHA-256 digest for addon '{}'", addon_id);
+        }
+
         Ok(zip_data)
     }
 }
@@ -1114,12 +1378,19 @@ pub fn save_addon_to_staging(
     base_dir: impl AsRef<Path>,
     zip_data: &[u8],
 ) -> Result<PathBuf, String> {
+    validate_addon_id(addon_id)?;
     let staging_dir = get_staging_directory(base_dir)?;
     let staged_file_path = staging_dir.join(format!("{}.zip", addon_id));
 
     // Validate zip data before saving
     if zip_data.is_empty() {
         return Err("Cannot stage empty addon data".to_string());
+    }
+    if zip_data.len() > MAX_ADDON_ARCHIVE_COMPRESSED_SIZE {
+        return Err(format!(
+            "Cannot stage addon data larger than {} bytes",
+            MAX_ADDON_ARCHIVE_COMPRESSED_SIZE
+        ));
     }
 
     log::debug!(
@@ -1208,6 +1479,7 @@ pub fn load_addon_from_staging(
     addon_id: &str,
     base_dir: impl AsRef<Path>,
 ) -> Result<Vec<u8>, String> {
+    validate_addon_id(addon_id)?;
     let staging_dir = get_staging_directory(base_dir)?;
     let staged_file_path = staging_dir.join(format!("{}.zip", addon_id));
 
@@ -1232,6 +1504,7 @@ pub fn load_addon_from_staging(
 
 /// Remove specific addon from staging
 pub fn remove_addon_from_staging(addon_id: &str, base_dir: impl AsRef<Path>) -> Result<(), String> {
+    validate_addon_id(addon_id)?;
     let staging_dir = get_staging_directory(base_dir)?;
     let staged_file_path = staging_dir.join(format!("{}.zip", addon_id));
 
@@ -1315,6 +1588,7 @@ pub async fn submit_addon_rating(
     review: Option<String>,
     instance_id: &str,
 ) -> Result<serde_json::Value, String> {
+    validate_addon_id(addon_id)?;
     if !(1..=5).contains(&rating) {
         return Err("Rating must be between 1 and 5".to_string());
     }
@@ -1408,7 +1682,11 @@ impl AddonService {
             .ok_or_else(|| format!("Addon manifest not found in {}", addon_dir.display()))
     }
 
-    fn write_addon_files(&self, addon_dir: &Path, files: &[AddonFile]) -> Result<(), String> {
+    fn write_addon_archive_files(
+        &self,
+        addon_dir: &Path,
+        files: &[AddonArchiveFile],
+    ) -> Result<(), String> {
         for file in files {
             let relative_path = validated_addon_archive_path(&file.name)?;
             let file_path = addon_dir.join(relative_path);
@@ -1430,6 +1708,160 @@ impl AddonService {
             .map_err(|e| format!("Failed to write manifest: {}", e))?;
         Ok(())
     }
+
+    fn enabled_manifest_for_addon(&self, addon_id: &str) -> Result<AddonManifest, String> {
+        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let manifest = self.read_manifest_or_error(&addon_dir)?;
+        if !manifest.is_enabled() {
+            return Err("Addon is disabled".to_string());
+        }
+        Ok(manifest)
+    }
+
+    fn manifest_allows_function(
+        manifest: &AddonManifest,
+        category: &str,
+        function_name: &str,
+    ) -> bool {
+        manifest
+            .permissions
+            .as_ref()
+            .map(|permissions| {
+                permissions.iter().any(|permission| {
+                    permission.category == category
+                        && permission.functions.iter().any(|function| {
+                            function.name == function_name
+                                && (function.is_declared || function.is_detected)
+                        })
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn write_network_audit_entry(
+        &self,
+        addon_id: &str,
+        request: &AddonNetworkRequest,
+        result: &Result<AddonNetworkResponse, String>,
+    ) -> Result<(), String> {
+        let audit_path = ensure_addons_directory(&self.addons_root)?.join("network-audit.jsonl");
+        let parsed_url = url::Url::parse(&request.url).ok();
+        let method = request
+            .method
+            .as_deref()
+            .unwrap_or("GET")
+            .to_ascii_uppercase();
+        let entry = match result {
+            Ok(response) => json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "addonId": addon_id,
+                "method": method,
+                "scheme": parsed_url.as_ref().map(|url| url.scheme()),
+                "host": parsed_url.as_ref().and_then(|url| url.host_str()),
+                "port": parsed_url.as_ref().and_then(|url| url.port_or_known_default()),
+                "allowed": true,
+                "status": response.status,
+                "responseBytes": response.body.len(),
+            }),
+            Err(error) => json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "addonId": addon_id,
+                "method": method,
+                "scheme": parsed_url.as_ref().map(|url| url.scheme()),
+                "host": parsed_url.as_ref().and_then(|url| url.host_str()),
+                "port": parsed_url.as_ref().and_then(|url| url.port_or_known_default()),
+                "allowed": false,
+                "errorCode": Self::classify_network_error(error),
+            }),
+        };
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&audit_path)
+            .map_err(|e| format!("Failed to open addon network audit log: {}", e))?;
+        serde_json::to_writer(&mut file, &entry)
+            .map_err(|e| format!("Failed to serialize addon network audit entry: {}", e))?;
+        writeln!(file).map_err(|e| format!("Failed to write addon network audit entry: {}", e))?;
+        Ok(())
+    }
+
+    fn audit_network_request(
+        &self,
+        addon_id: &str,
+        request: &AddonNetworkRequest,
+        result: &Result<AddonNetworkResponse, String>,
+    ) {
+        if let Err(error) = self.write_network_audit_entry(addon_id, request, result) {
+            log::warn!("Failed to write addon network audit entry: {}", error);
+        }
+    }
+
+    fn classify_network_error(error: &str) -> &'static str {
+        if error.contains("disabled") {
+            "addon_disabled"
+        } else if error.contains("Invalid addon id") {
+            "invalid_addon_id"
+        } else if error.contains("not approved") || error.contains("not declared") {
+            "host_not_approved"
+        } else if error.contains("not allowed to use network auth") {
+            "network_auth_permission_denied"
+        } else if error.contains("must use HTTPS") {
+            "https_required"
+        } else if error.contains("credentials") {
+            "url_credentials"
+        } else if error.contains("method") {
+            "method_not_allowed"
+        } else if error.contains("not allowed") {
+            "blocked_host"
+        } else if error.contains("could not be resolved") {
+            "dns_resolution_failed"
+        } else if error.contains("private address") {
+            "private_address_resolution"
+        } else if error.contains("too large") {
+            "size_limit_exceeded"
+        } else {
+            "request_failed"
+        }
+    }
+
+    fn apply_network_approvals(
+        mut manifest: AddonManifest,
+        approved_network_hosts: &[String],
+    ) -> AddonManifest {
+        if let Some(network) = manifest.network.as_mut() {
+            let requested = network.allowed_hosts.clone();
+            network.approved_hosts = approved_network_hosts
+                .iter()
+                .map(|host| host.trim().trim_end_matches('.').to_ascii_lowercase())
+                .filter(|host| requested.contains(host))
+                .collect();
+            network.approved_hosts.sort();
+            network.approved_hosts.dedup();
+        }
+        manifest
+    }
+
+    fn preserve_existing_network_approvals(
+        mut manifest: AddonManifest,
+        previous: Option<&AddonManifest>,
+    ) -> AddonManifest {
+        if let Some(network) = manifest.network.as_mut() {
+            let allowed_hosts = network.allowed_hosts.clone();
+            let previous_approved = previous
+                .and_then(|m| m.network.as_ref())
+                .map(|network| network.approved_hosts.as_slice())
+                .unwrap_or(&[]);
+            network.approved_hosts = previous_approved
+                .iter()
+                .filter(|host| allowed_hosts.contains(host))
+                .cloned()
+                .collect();
+            network.approved_hosts.sort();
+            network.approved_hosts.dedup();
+        }
+        manifest
+    }
 }
 
 #[async_trait]
@@ -1438,8 +1870,9 @@ impl AddonServiceTrait for AddonService {
         &self,
         zip_data: Vec<u8>,
         enable_after_install: bool,
+        approved_network_hosts: Vec<String>,
     ) -> Result<AddonManifest, String> {
-        let extracted = extract_addon_zip_internal(zip_data)?;
+        let extracted = extract_addon_zip_archive(zip_data)?;
         let addon_id = extracted.metadata.id.clone();
         let addon_dir = get_addon_path(&self.addons_root, &addon_id)?;
 
@@ -1450,9 +1883,12 @@ impl AddonServiceTrait for AddonService {
         fs::create_dir_all(&addon_dir)
             .map_err(|e| format!("Failed to create addon directory: {}", e))?;
 
-        self.write_addon_files(&addon_dir, &extracted.files)?;
+        self.write_addon_archive_files(&addon_dir, &extracted.files)?;
 
-        let metadata = extracted.metadata.to_installed(enable_after_install)?;
+        let metadata = Self::apply_network_approvals(
+            extracted.metadata.to_installed(enable_after_install)?,
+            &approved_network_hosts,
+        );
         self.write_manifest(&addon_dir, &metadata)?;
 
         Ok(metadata)
@@ -1462,9 +1898,23 @@ impl AddonServiceTrait for AddonService {
         &self,
         addon_id: &str,
         enable_after_install: bool,
+        approved_network_hosts: Vec<String>,
     ) -> Result<AddonManifest, String> {
         let zip = load_addon_from_staging(addon_id, &self.addons_root)?;
-        let extracted = extract_addon_zip_internal(zip)?;
+        let extracted = match extract_addon_zip_archive(zip) {
+            Ok(extracted) => extracted,
+            Err(err) => {
+                let _ = remove_addon_from_staging(addon_id, &self.addons_root);
+                return Err(err);
+            }
+        };
+        if extracted.metadata.id != addon_id {
+            let _ = remove_addon_from_staging(addon_id, &self.addons_root);
+            return Err(format!(
+                "Staged addon id mismatch: requested '{}', manifest contains '{}'",
+                addon_id, extracted.metadata.id
+            ));
+        }
         let addon_dir = get_addon_path(&self.addons_root, &extracted.metadata.id)?;
 
         if addon_dir.exists() {
@@ -1474,9 +1924,12 @@ impl AddonServiceTrait for AddonService {
         fs::create_dir_all(&addon_dir)
             .map_err(|e| format!("Failed to create addon directory: {}", e))?;
 
-        self.write_addon_files(&addon_dir, &extracted.files)?;
+        self.write_addon_archive_files(&addon_dir, &extracted.files)?;
 
-        let metadata = extracted.metadata.to_installed(enable_after_install)?;
+        let metadata = Self::apply_network_approvals(
+            extracted.metadata.to_installed(enable_after_install)?,
+            &approved_network_hosts,
+        );
         self.write_manifest(&addon_dir, &metadata)?;
 
         // Clean staging file
@@ -1507,9 +1960,13 @@ impl AddonServiceTrait for AddonService {
                 if !dir.is_dir() {
                     continue;
                 }
-                let manifest = match self.read_manifest_if_exists(&dir)? {
-                    Some(m) => m,
-                    None => continue,
+                let manifest = match self.read_manifest_if_exists(&dir) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        log::error!("Skipping invalid addon manifest in {:?}: {}", dir, err);
+                        continue;
+                    }
                 };
                 let files_count = fs::read_dir(&dir)
                     .map_err(|e| format!("Failed to count addon files: {}", e))?
@@ -1548,10 +2005,14 @@ impl AddonServiceTrait for AddonService {
             return Err("Main addon file not found".to_string());
         }
 
-        Ok(ExtractedAddon {
-            metadata: manifest,
-            files,
-        })
+        let detected_permissions = detect_addon_permissions(&files);
+        let mut metadata = manifest;
+        metadata.permissions = Some(merge_detected_permissions(
+            metadata.permissions.as_deref(),
+            detected_permissions,
+        ));
+
+        Ok(ExtractedAddon { metadata, files })
     }
 
     fn get_enabled_addons_on_startup(&self) -> Result<Vec<ExtractedAddon>, String> {
@@ -1587,9 +2048,13 @@ impl AddonServiceTrait for AddonService {
                 if !dir.is_dir() {
                     continue;
                 }
-                let manifest = match self.read_manifest_if_exists(&dir)? {
-                    Some(m) => m,
-                    None => continue,
+                let manifest = match self.read_manifest_if_exists(&dir) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        log::error!("Skipping invalid addon manifest in {:?}: {}", dir, err);
+                        continue;
+                    }
                 };
                 let addon_id = manifest.id.clone();
                 match check_addon_update_from_api(
@@ -1609,6 +2074,7 @@ impl AddonServiceTrait for AddonService {
                                 latest_version: "unknown".to_string(),
                                 update_available: false,
                                 download_url: None,
+                                sha256: None,
                                 release_notes: None,
                                 release_date: None,
                                 changelog_url: None,
@@ -1627,13 +2093,20 @@ impl AddonServiceTrait for AddonService {
 
     async fn update_addon_from_store(&self, addon_id: &str) -> Result<AddonManifest, String> {
         let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
-        let was_enabled = self
-            .read_manifest_if_exists(&addon_dir)?
+        let previous_manifest = self.read_manifest_if_exists(&addon_dir)?;
+        let was_enabled = previous_manifest
+            .as_ref()
             .and_then(|m| m.enabled)
             .unwrap_or(false);
 
         let zip_data = download_addon_from_store(addon_id, &self.instance_id).await?;
-        let extracted = extract_addon_zip_internal(zip_data)?;
+        let extracted = extract_addon_zip_archive(zip_data)?;
+        if extracted.metadata.id != addon_id {
+            return Err(format!(
+                "Downloaded addon id mismatch: requested '{}', manifest contains '{}'",
+                addon_id, extracted.metadata.id
+            ));
+        }
 
         if addon_dir.exists() {
             fs::remove_dir_all(&addon_dir)
@@ -1642,12 +2115,40 @@ impl AddonServiceTrait for AddonService {
         fs::create_dir_all(&addon_dir)
             .map_err(|e| format!("Failed to create addon directory: {}", e))?;
 
-        self.write_addon_files(&addon_dir, &extracted.files)?;
+        self.write_addon_archive_files(&addon_dir, &extracted.files)?;
 
-        let metadata = extracted.metadata.to_installed(was_enabled)?;
+        let metadata = Self::preserve_existing_network_approvals(
+            extracted.metadata.to_installed(was_enabled)?,
+            previous_manifest.as_ref(),
+        );
         self.write_manifest(&addon_dir, &metadata)?;
 
         Ok(metadata)
+    }
+
+    async fn addon_network_request(
+        &self,
+        addon_id: &str,
+        request: AddonNetworkRequest,
+    ) -> Result<AddonNetworkResponse, String> {
+        let result = match self.enabled_manifest_for_addon(addon_id) {
+            Ok(manifest) => {
+                if (request.auth.is_some() || request.injected_authorization.is_some())
+                    && !Self::manifest_allows_function(&manifest, "secrets", "use")
+                {
+                    Err("Addon is not allowed to use network auth secrets".to_string())
+                } else {
+                    let approved_hosts = manifest
+                        .network
+                        .map(|network| network.approved_hosts)
+                        .unwrap_or_default();
+                    perform_addon_network_request(addon_id, &approved_hosts, request.clone()).await
+                }
+            }
+            Err(error) => Err(error),
+        };
+        self.audit_network_request(addon_id, &request, &result);
+        result
     }
 
     fn toggle_addon(&self, addon_id: &str, enabled: bool) -> Result<(), String> {
@@ -1662,6 +2163,13 @@ impl AddonServiceTrait for AddonService {
         let zip = download_addon_from_store(addon_id, &self.instance_id).await?;
         let _staged_path = save_addon_to_staging(addon_id, &self.addons_root, &zip)?;
         let extracted = extract_addon_zip_internal(zip)?;
+        if extracted.metadata.id != addon_id {
+            let _ = remove_addon_from_staging(addon_id, &self.addons_root);
+            return Err(format!(
+                "Downloaded addon id mismatch: requested '{}', manifest contains '{}'",
+                addon_id, extracted.metadata.id
+            ));
+        }
         Ok(extracted)
     }
 

@@ -29,6 +29,14 @@ pub struct AddonPermission {
     pub purpose: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonNetworkAccess {
+    pub allowed_hosts: Vec<String>,
+    #[serde(default)]
+    pub approved_hosts: Vec<String>,
+}
+
 /// Unified addon manifest structure that handles both development and runtime scenarios
 /// This represents both what developers write in their manifest.json and installed addon metadata
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -52,6 +60,7 @@ pub struct AddonManifest {
     pub min_wealthfolio_version: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub icon: Option<String>,
+    pub network: Option<AddonNetworkAccess>,
 
     // Runtime fields (only present after installation)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +122,7 @@ pub struct InstalledAddon {
 pub struct AddonStoreListing {
     pub metadata: AddonManifest,
     pub download_url: String,
+    pub sha256: Option<String>,
     pub downloads: Option<u32>,
     pub rating: Option<f32>,
     pub review_count: Option<u32>,
@@ -130,6 +140,7 @@ pub struct AddonUpdateInfo {
     pub latest_version: String,
     pub update_available: bool,
     pub download_url: Option<String>,
+    pub sha256: Option<String>,
     pub release_notes: Option<String>,
     pub release_date: Option<String>,
     pub changelog_url: Option<String>,

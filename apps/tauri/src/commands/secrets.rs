@@ -1,7 +1,7 @@
 use crate::{context::ServiceContext, secret_store::KeyringSecretStore};
 use std::sync::Arc;
-use tauri::State;
-use wealthfolio_core::secrets::SecretStore;
+use tauri::{AppHandle, State};
+use wealthfolio_core::secrets::{addon_secret_service_id, SecretStore};
 
 #[tauri::command]
 pub async fn set_secret(
@@ -31,5 +31,45 @@ pub async fn delete_secret(
 ) -> Result<(), String> {
     KeyringSecretStore
         .delete_secret(&secret_key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_addon_secret(
+    addon_id: String,
+    key: String,
+    secret: String,
+    _app: AppHandle,
+    _state: State<'_, Arc<ServiceContext>>,
+) -> Result<(), String> {
+    let service_id = addon_secret_service_id(&addon_id, &key)?;
+    KeyringSecretStore
+        .set_secret(&service_id, &secret)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_addon_secret(
+    addon_id: String,
+    key: String,
+    _app: AppHandle,
+    _state: State<'_, Arc<ServiceContext>>,
+) -> Result<Option<String>, String> {
+    let service_id = addon_secret_service_id(&addon_id, &key)?;
+    KeyringSecretStore
+        .get_secret(&service_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_addon_secret(
+    addon_id: String,
+    key: String,
+    _app: AppHandle,
+    _state: State<'_, Arc<ServiceContext>>,
+) -> Result<(), String> {
+    let service_id = addon_secret_service_id(&addon_id, &key)?;
+    KeyringSecretStore
+        .delete_secret(&service_id)
         .map_err(|e| e.to_string())
 }
