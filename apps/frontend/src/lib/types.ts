@@ -650,6 +650,9 @@ export interface AssetLotView {
   accountName: string;
   assetId: string;
   source: AssetLotSource;
+  currency: string;
+  baseCurrency?: string | null;
+  displayCurrency: string;
   quantity: number;
   originalQuantity: number;
   remainingQuantity: number;
@@ -659,6 +662,10 @@ export interface AssetLotView {
   fees: number;
   taxes: number;
   taxesBase?: number | null;
+  displayUnitCost?: number | null;
+  displayCostBasis?: number | null;
+  displayFees?: number | null;
+  displayTaxes?: number | null;
   fxRateToBase?: number | null;
   splitRatio: number;
   contractMultiplier: number;
@@ -671,6 +678,9 @@ export interface AssetLotView {
   disposalCostBasisBase?: number | null;
   realizedPnl?: number | null;
   realizedPnlBase?: number | null;
+  displayDisposalProceeds?: number | null;
+  displayDisposalCostBasis?: number | null;
+  displayRealizedPnl?: number | null;
 }
 
 export interface Position {
@@ -780,6 +790,8 @@ export interface Asset {
   // Valuation
   quoteMode: "MARKET" | "MANUAL";
   quoteCcy: string; // Currency prices/valuations are quoted in
+  displayMarketPrice?: number | null;
+  displayMarketCurrency?: string | null;
 
   // Instrument identity (null for non-market assets)
   instrumentType?: string | null; // EQUITY, CRYPTO, FX, OPTION, METAL
