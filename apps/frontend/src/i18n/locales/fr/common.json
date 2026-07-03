@@ -310,5 +310,9 @@
     "description": "Désolé, nous n'avons pas trouvé la page que vous recherchez. Elle a peut-être été déplacée, supprimée ou n'a jamais existé.",
     "goBack": "Retour",
     "backToDashboard": "Retour au tableau de bord"
+  },
+  "navStyle": {
+    "sidebar": "Barre latérale",
+    "floating": "Barre flottante"
   }
 }

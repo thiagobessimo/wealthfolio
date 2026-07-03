@@ -1395,5 +1395,7 @@
   "ai_providers_empty_title": "Keine KI-Anbieter verfügbar",
   "ai_providers_empty_description": "KI-Anbieter erscheinen hier, sobald sie konfiguriert sind. Schauen Sie später noch einmal vorbei oder wenden Sie sich an den Support.",
   "about_logo_alt": "Wealthfolio-Logo",
-  "language_region_title": "Sprache & Region"
+  "language_region_title": "Sprache & Region",
+  "appearance_navigation_title": "Navigation",
+  "appearance_navigation_description": "Wählen Sie die Navigation auf großen Bildschirmen."
 }

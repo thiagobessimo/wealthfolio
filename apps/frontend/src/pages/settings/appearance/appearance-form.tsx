@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import * as z from "zod";
 
 import { FontSelector } from "@/components/font-selector";
+import { NavigationStyleSelector } from "@/components/navigation-style-selector";
 import { ThemeSelector } from "@/components/theme-selector";
 import {
   Form,
@@ -17,6 +18,7 @@ import {
 import { Switch } from "@wealthfolio/ui/components/ui/switch";
 import { usePlatform } from "@/hooks/use-platform";
 import { useSettingsContext } from "@/lib/settings-provider";
+import { useNavigationMode } from "@/pages/layouts/navigation/navigation-mode-context";
 
 interface AppearanceFormValues {
   theme: "light" | "dark" | "system";
@@ -28,6 +30,7 @@ export function AppearanceForm() {
   const { t } = useTranslation();
   const { settings, updateSettings } = useSettingsContext();
   const { isMobile } = usePlatform();
+  const { mode: navigationMode, setMode: setNavigationMode } = useNavigationMode();
   const appearanceFormSchema = z.object({
     theme: z.enum(["light", "dark", "system"], {
       required_error: t("settings:appearance_theme_required"),
@@ -108,6 +111,22 @@ export function AppearanceForm() {
             </FormItem>
           )}
         />
+
+        {!isMobile && (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-base font-medium">{t("settings:appearance_navigation_title")}</p>
+              <p className="text-muted-foreground text-sm">
+                {t("settings:appearance_navigation_description")}
+              </p>
+            </div>
+            <NavigationStyleSelector
+              value={navigationMode}
+              onChange={setNavigationMode}
+              className="max-w-md"
+            />
+          </div>
+        )}
 
         {!isMobile && (
           <FormField

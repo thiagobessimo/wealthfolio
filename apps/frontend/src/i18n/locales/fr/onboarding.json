@@ -71,9 +71,7 @@
       "serifLabel": "Serif",
       "serifDescription": "Classique et élégante"
     },
-    "navigationLabel": "Navigation",
-    "navSidebar": "Barre latérale",
-    "navFloating": "Barre flottante"
+    "navigationLabel": "Navigation"
   },
   "connect": {
     "optional": "Optionnel",

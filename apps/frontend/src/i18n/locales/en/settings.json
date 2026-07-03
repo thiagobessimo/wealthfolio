@@ -1395,5 +1395,7 @@
   "ai_providers_empty_title": "No AI Providers Available",
   "ai_providers_empty_description": "AI providers will appear here once configured. Check back later or contact support.",
   "about_logo_alt": "Wealthfolio logo",
-  "language_region_title": "Language & Region"
+  "language_region_title": "Language & Region",
+  "appearance_navigation_title": "Navigation",
+  "appearance_navigation_description": "Choose how you navigate on large screens."
 }

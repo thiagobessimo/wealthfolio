@@ -1395,5 +1395,7 @@
   "ai_providers_empty_title": "Aucun fournisseur d'IA disponible",
   "ai_providers_empty_description": "Les fournisseurs d'IA apparaîtront ici une fois configurés. Revenez plus tard ou contactez le support.",
   "about_logo_alt": "Logo Wealthfolio",
-  "language_region_title": "Langue et région"
+  "language_region_title": "Langue et région",
+  "appearance_navigation_title": "Navigation",
+  "appearance_navigation_description": "Choisissez votre mode de navigation sur grand écran."
 }

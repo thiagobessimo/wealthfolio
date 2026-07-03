@@ -310,5 +310,9 @@
     "description": "Die gesuchte Seite konnte leider nicht gefunden werden. Sie wurde möglicherweise verschoben, gelöscht oder existierte nie.",
     "goBack": "Zurück",
     "backToDashboard": "Zurück zum Dashboard"
+  },
+  "navStyle": {
+    "sidebar": "Seitenleiste",
+    "floating": "Schwebeleiste"
   }
 }
