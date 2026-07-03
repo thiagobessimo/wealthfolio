@@ -254,16 +254,18 @@ export const OnboardingAppearance = forwardRef<
                 >
                   <div className="bg-muted/40 aspect-video w-full overflow-hidden p-2.5">
                     <div className="flex h-full gap-1.5">
-                      <div className="bg-foreground/10 flex w-1/4 flex-col gap-1 rounded-md p-1.5">
-                        <div className="bg-foreground/40 h-1.5 w-1.5 rounded-full" />
-                        <div className="bg-foreground/25 mt-1 h-1 w-full rounded-full" />
-                        <div className="bg-foreground/25 h-1 w-4/5 rounded-full" />
-                        <div className="bg-foreground/25 h-1 w-full rounded-full" />
-                        <div className="bg-foreground/25 h-1 w-3/5 rounded-full" />
+                      <div className="bg-foreground/10 flex w-[18%] flex-col items-center gap-1.5 rounded-md py-2">
+                        <div className="bg-foreground/40 h-2.5 w-2.5 rounded-[4px]" />
+                        <div className="bg-foreground/10 my-0.5 h-px w-1/2 rounded-full" />
+                        <div className="bg-foreground/45 h-2.5 w-2.5 rounded-full" />
+                        <div className="bg-foreground/20 h-2.5 w-2.5 rounded-full" />
+                        <div className="bg-foreground/20 h-2.5 w-2.5 rounded-full" />
+                        <div className="bg-foreground/20 h-2.5 w-2.5 rounded-full" />
                       </div>
                       <div className="bg-foreground/5 flex flex-1 flex-col gap-1.5 rounded-md p-2">
                         <div className="bg-foreground/20 h-2 w-1/2 rounded-full" />
-                        <div className="grid flex-1 grid-cols-2 gap-1.5">
+                        <div className="grid flex-1 grid-cols-3 gap-1.5">
+                          <div className="bg-foreground/10 rounded" />
                           <div className="bg-foreground/10 rounded" />
                           <div className="bg-foreground/10 rounded" />
                         </div>
@@ -307,16 +309,18 @@ export const OnboardingAppearance = forwardRef<
                 >
                   <div className="bg-muted/40 aspect-video w-full overflow-hidden p-2.5">
                     <div className="bg-foreground/5 relative h-full rounded-md p-2">
-                      <div className="bg-foreground/20 h-2 w-1/2 rounded-full" />
+                      <div className="bg-foreground/20 h-2 w-2/5 rounded-full" />
                       <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-                        <div className="bg-foreground/10 h-6 rounded" />
-                        <div className="bg-foreground/10 h-6 rounded" />
-                        <div className="bg-foreground/10 h-6 rounded" />
+                        <div className="bg-foreground/10 h-7 rounded" />
+                        <div className="bg-foreground/10 h-7 rounded" />
+                        <div className="bg-foreground/10 h-7 rounded" />
                       </div>
-                      <div className="bg-foreground/70 absolute bottom-1.5 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full px-2 py-1 shadow-sm">
+                      <div className="bg-foreground/80 absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-2.5 py-1.5 shadow-sm">
                         <div className="bg-background h-1.5 w-1.5 rounded-full" />
-                        <div className="bg-background/60 h-1.5 w-1.5 rounded-full" />
-                        <div className="bg-background/60 h-1.5 w-1.5 rounded-full" />
+                        <div className="bg-background/45 h-1.5 w-1.5 rounded-full" />
+                        <div className="bg-background/45 h-1.5 w-1.5 rounded-full" />
+                        <div className="bg-background/45 h-1.5 w-1.5 rounded-full" />
+                        <div className="bg-background/45 h-1.5 w-1.5 rounded-full" />
                       </div>
                     </div>
                   </div>
