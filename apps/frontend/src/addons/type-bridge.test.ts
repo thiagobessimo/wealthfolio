@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { vi, describe, it, expect } from "vitest";
 import { createPermissionGuard, createSDKHostAPIBridge, type InternalHostAPI } from "./type-bridge";
 
@@ -127,6 +129,20 @@ describe("Addon Type Bridge", () => {
         },
       ]);
 
+      expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
+    });
+
+    it("should support legacy string function permissions from raw manifests", () => {
+      const guard = createPermissionGuard("test-addon", [
+        {
+          category: "ui",
+          purpose: "Navigation",
+          functions: ["sidebar.addItem", "router.add"],
+        },
+      ] as unknown as Parameters<typeof createPermissionGuard>[1]);
+
+      expect(guard.canUse("ui", "sidebar.addItem")).toBe(true);
+      expect(guard.canUse("ui", "router.add")).toBe(true);
       expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
     });
 

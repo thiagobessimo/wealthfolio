@@ -21,8 +21,8 @@
   "permissions": [
     {
       "category": "ui",
-      "functions": ["sidebar.addItem"],
-      "purpose": "Add navigation items to the sidebar"
+      "functions": ["sidebar.addItem", "router.add"],
+      "purpose": "Add navigation items and pages"
     }
   ],
   "keywords": ["wealthfolio", "addon"],

@@ -219,6 +219,7 @@ export interface InternalHostAPI {
 }
 
 type SDKApiWithoutSecrets = Omit<SDKHostAPI, "secrets">;
+type PermissionFunctionInput = Permission["functions"][number] | string;
 
 export interface PermissionGuard {
   canUse(category: string, functionName: string): boolean;
@@ -232,8 +233,10 @@ export function createPermissionGuard(
   const allowed = new Set<string>();
 
   for (const permission of permissions ?? []) {
-    for (const fn of permission.functions ?? []) {
-      if (fn.isDeclared) {
+    for (const fn of (permission.functions ?? []) as PermissionFunctionInput[]) {
+      if (typeof fn === "string") {
+        allowed.add(`${permission.category}:${fn}`);
+      } else if (fn.isDeclared) {
         allowed.add(`${permission.category}:${fn.name}`);
       }
     }
