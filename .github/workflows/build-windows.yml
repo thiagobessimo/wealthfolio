@@ -43,7 +43,9 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           # Reuse the caches warmed on main by cache-warm.yml.
-          shared-key: release-${{ env.TARGET == 'aarch64-pc-windows-msvc' && 'windows-aarch64' || 'windows-x86_64' }}
+          shared-key:
+            release-${{ env.TARGET == 'aarch64-pc-windows-msvc' && 'windows-aarch64' ||
+            'windows-x86_64' }}
           save-if: false
 
       - name: Sync node version and setup cache
