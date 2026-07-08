@@ -19,22 +19,11 @@ struct AddonNetworkBody {
     request: AddonNetworkRequest,
 }
 
-fn ensure_addon_network_auth(state: &AppState) -> ApiResult<()> {
-    if state.auth.is_none() {
-        return Err(ApiError::Unauthorized(
-            "Addon network broker requires authentication".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 async fn addon_network_request(
     State(state): State<Arc<AppState>>,
     Path(addon_id): Path<String>,
     Json(body): Json<AddonNetworkBody>,
 ) -> ApiResult<Json<AddonNetworkResponse>> {
-    ensure_addon_network_auth(&state)?;
     let mut request = body.request;
     let injected_authorization = resolve_addon_network_auth_header(
         &addon_id,

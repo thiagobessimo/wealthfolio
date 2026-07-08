@@ -14,16 +14,6 @@ use wealthfolio_core::secrets::{
     addon_secret_service_id, legacy_addon_secret_service_id, validate_unscoped_secret_service_id,
 };
 
-fn ensure_secret_api_auth(state: &AppState) -> ApiResult<()> {
-    if state.auth.is_none() {
-        return Err(ApiError::Unauthorized(
-            "Secrets API requires authentication".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 #[derive(serde::Deserialize)]
 struct SecretSetBody {
     #[serde(rename = "secretKey")]
@@ -35,7 +25,6 @@ async fn set_secret(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SecretSetBody>,
 ) -> ApiResult<StatusCode> {
-    ensure_secret_api_auth(&state)?;
     validate_unscoped_secret_service_id(&body.secret_key).map_err(ApiError::BadRequest)?;
     state
         .secret_store
@@ -53,7 +42,6 @@ async fn get_secret(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SecretQuery>,
 ) -> ApiResult<Json<Option<String>>> {
-    ensure_secret_api_auth(&state)?;
     validate_unscoped_secret_service_id(&q.secret_key).map_err(ApiError::BadRequest)?;
     let val = state.secret_store.get_secret(&q.secret_key)?;
     Ok(Json(val))
@@ -63,7 +51,6 @@ async fn delete_secret(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SecretQuery>,
 ) -> ApiResult<StatusCode> {
-    ensure_secret_api_auth(&state)?;
     validate_unscoped_secret_service_id(&q.secret_key).map_err(ApiError::BadRequest)?;
     state.secret_store.delete_secret(&q.secret_key)?;
     Ok(StatusCode::NO_CONTENT)
@@ -80,7 +67,6 @@ async fn set_addon_secret(
     Path(addon_id): Path<String>,
     Json(body): Json<AddonSecretSetBody>,
 ) -> ApiResult<StatusCode> {
-    ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &body.key).map_err(ApiError::BadRequest)?;
     let legacy_service_id =
         legacy_addon_secret_service_id(&addon_id, &body.key).map_err(ApiError::BadRequest)?;
@@ -99,7 +85,6 @@ async fn get_addon_secret(
     Path(addon_id): Path<String>,
     Query(q): Query<AddonSecretQuery>,
 ) -> ApiResult<Json<Option<String>>> {
-    ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
     if let Some(value) = state.secret_store.get_secret(&service_id)? {
         return Ok(Json(Some(value)));
@@ -120,7 +105,6 @@ async fn delete_addon_secret(
     Path(addon_id): Path<String>,
     Query(q): Query<AddonSecretQuery>,
 ) -> ApiResult<StatusCode> {
-    ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
     let legacy_service_id =
         legacy_addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
