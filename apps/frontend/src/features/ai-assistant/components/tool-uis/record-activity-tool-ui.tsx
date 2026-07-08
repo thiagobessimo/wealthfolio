@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 import { useBalancePrivacy } from "@/hooks/use-balance-privacy";
 import { useSettingsContext } from "@/lib/settings-provider";
 import { updateToolResult } from "@/adapters";
-import { localizeActivityTypeName } from "@/lib/activity-utils";
+import { localizeActivitySubtypeName, localizeActivityTypeName } from "@/lib/activity-utils";
 import { ActivityType, QuoteMode } from "@/lib/constants";
 import type { ActivityDetails } from "@/lib/types";
 import { parse as dateFnsParse } from "date-fns";
@@ -680,7 +680,10 @@ function DraftReview({
           <ReviewField label={t("ai:recordActivity.fee")} value={formatAmount(draft.fee)} />
         )}
         {draft.subtype && (
-          <ReviewField label={t("ai:recordActivity.subtype")} value={draft.subtype} />
+          <ReviewField
+            label={t("ai:recordActivity.subtype")}
+            value={localizeActivitySubtypeName(t, draft.subtype)}
+          />
         )}
       </div>
 
@@ -838,8 +841,8 @@ function DraftForm({
   const FormComponent = config.component;
   const activityTypeDisplay = localizeActivityTypeName(t, draft.activityType);
   const cardTitle = isEditing
-    ? t("ai:recordActivity.editActivity", { type: activityTypeDisplay.toLowerCase() })
-    : t("ai:recordActivity.reviewActivity", { type: activityTypeDisplay.toLowerCase() });
+    ? t("ai:recordActivity.editActivity", { type: activityTypeDisplay })
+    : t("ai:recordActivity.reviewActivity", { type: activityTypeDisplay });
   const headerAmount =
     draft.amount ??
     (draft.quantity != null && draft.unitPrice != null
