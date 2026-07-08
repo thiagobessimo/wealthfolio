@@ -95,13 +95,22 @@ function validateAddonCompatibility(manifest: AddonManifest): boolean {
  */
 async function loadAddon(addonFile: AddonFile): Promise<boolean> {
   try {
-    // Check if this addon ID has already been loaded in the current session
+    // Dedup guard: skip only when the addon is loaded AND its runtime actually
+    // exists. Some stop paths (e.g. a late loadError after a sandbox
+    // self-reload) tear the runtime down without clearing loadedAddonIds —
+    // treating that as "already loaded" would make every re-activation
+    // (self-heal, Retry) a silent no-op with no runtime behind it.
     if (loadedAddonIds.has(addonFile.manifest.id)) {
+      if (addonIframeManager.hasRuntime(addonFile.manifest.id)) {
+        logger.warn(
+          `Addon "${addonFile.manifest.name}" (ID: ${addonFile.manifest.id}) already loaded in this session. Skipping duplicate load.`,
+        );
+        return true;
+      }
       logger.warn(
-        `Addon "${addonFile.manifest.name}" (ID: ${addonFile.manifest.id}) already loaded in this session. Skipping duplicate load.`,
+        `Addon "${addonFile.manifest.id}" is marked loaded but has no runtime — rebooting.`,
       );
-      // Optionally, you might want to return true if already loaded implies success for the caller
-      return true;
+      loadedAddonIds.delete(addonFile.manifest.id);
     }
 
     // Validate compatibility

@@ -11,6 +11,11 @@ describe("classifyAddonErrorHint", () => {
     expect(classifyAddonErrorHint("Uncaught SecurityError accessing sessionStorage")).toContain(
       "storage API",
     );
+
+    // WKWebView (Tauri macOS) shape — no storage keyword in the message.
+    expect(classifyAddonErrorHint("SecurityError: The operation is insecure.")).toContain(
+      "storage API",
+    );
   });
 
   it("does NOT classify a non-storage SecurityError as a storage problem", () => {

@@ -335,6 +335,13 @@ UI filter, Rust escalation skip (+tests in `type-bridge.test.ts` and core tests)
 - Auth-gate removal ships with no replacement signal; a later "server runs
   unauthenticated" banner remains possible (explicitly out of scope now).
 - Single-PR refactor: agreed; commits per workstream (A–H) keep it reviewable.
+- **Known limitation (deep-review finding):** runtime-registered (transient)
+  sub-routes of a lazy addon — e.g. Swingfolio's `/activities` and `/settings` —
+  don't exist in the host router until the addon boots, so a hard app reload
+  while ON a sub-route lands on 404 until the user re-enters via the sidebar
+  (the durable contributed route self-heals; sub-routes can't). Future options:
+  non-nav durable route contributions (`contributes.routes` or `views[].hidden`)
+  or addons folding sub-pages into query params on the durable route. Deferred.
 
 ### Simplifications applied in the over-engineering pass
 Dropped from v1 (each was speculative for Phases 0–3): `activationEvents` manifest

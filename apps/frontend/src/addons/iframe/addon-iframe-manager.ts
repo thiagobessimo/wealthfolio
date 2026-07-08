@@ -205,7 +205,10 @@ export function classifyAddonErrorHint(rawMessage: string | undefined): string |
     message.includes("sessionstorage") ||
     message.includes("allow-same-origin") ||
     (message.includes("securityerror") && message.includes("storage")) ||
-    (message.includes("sandbox") && message.includes("storage"))
+    (message.includes("sandbox") && message.includes("storage")) ||
+    // WKWebView (Tauri on macOS) reports opaque-origin storage access as a
+    // bare "SecurityError: The operation is insecure." with no storage keyword.
+    message.includes("the operation is insecure")
   ) {
     return "This add-on uses browser storage (localStorage/sessionStorage), which is unavailable in the add-on sandbox. Update the add-on to use the storage API.";
   }
