@@ -1856,6 +1856,20 @@ impl AddonService {
                 MAX_ADDON_STORAGE_KEY_LEN
             ));
         }
+        // The key is embedded verbatim in the device-sync entity id, which must
+        // match the sync server's allowed charset (letters, digits, and
+        // `_ . : -`). Rejecting anything outside it here guarantees a stored key
+        // can never produce an event the server refuses (which would otherwise
+        // fail the whole push batch).
+        if !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        {
+            return Err(
+                "Invalid storage key: only letters, digits, and the characters _ . : - are allowed"
+                    .to_string(),
+            );
+        }
         Ok(())
     }
 

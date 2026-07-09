@@ -2145,6 +2145,25 @@ mod service_tests {
                 .is_err(),
             "oversized value must be rejected"
         );
+        // Keys must stay within the sync-safe charset so they can never produce
+        // an entity id the sync server rejects.
+        for bad_key in ["my key", "a/b", "café", "emoji😀"] {
+            assert!(
+                service
+                    .set_addon_storage_item("addon", bad_key, "value")
+                    .await
+                    .is_err(),
+                "key with disallowed characters must be rejected: {bad_key:?}"
+            );
+        }
+        // The full sync-safe charset (letters, digits, `_ . : -`) is accepted.
+        assert!(
+            service
+                .set_addon_storage_item("addon", "swing.prefs_v2:section-1", "value")
+                .await
+                .is_ok(),
+            "keys within the allowed charset must be accepted"
+        );
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
