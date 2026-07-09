@@ -109,9 +109,23 @@ function reportLoadPhase(phase: string) {
   post("loadPhase", { phase });
 }
 
+// Resolve on the next paint, but with a timer fallback. Legacy `render` routes
+// (which never call `onRendered`) rely on this to signal completion — and a
+// cold route render happens while the host has the iframe `visibility: hidden`,
+// where `requestAnimationFrame` is throttled/paused (notably in WKWebView). A
+// pure rAF wait would then never resolve, so the host's render times out and
+// the addon shows "failed to load". The fallback guarantees progress; rAF still
+// wins when the frame is visible, keeping the paint-synced reveal.
 function waitForNextPaint() {
   return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 50);
   });
 }
 
