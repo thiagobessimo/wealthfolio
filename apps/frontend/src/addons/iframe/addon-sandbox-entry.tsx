@@ -109,9 +109,23 @@ function reportLoadPhase(phase: string) {
   post("loadPhase", { phase });
 }
 
+// Resolve on the next paint, but with a timer fallback. Legacy `render` routes
+// (which never call `onRendered`) rely on this to signal completion — and a
+// cold route render happens while the host has the iframe `visibility: hidden`,
+// where `requestAnimationFrame` is throttled/paused (notably in WKWebView). A
+// pure rAF wait would then never resolve, so the host's render times out and
+// the addon shows "failed to load". The fallback guarantees progress; rAF still
+// wins when the frame is visible, keeping the paint-synced reveal.
 function waitForNextPaint() {
   return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 50);
   });
 }
 
@@ -457,7 +471,7 @@ export function RouteRenderCommit({ onRendered }: { onRendered?: () => void }) {
 }
 
 function createReactRouteRenderer(component: unknown): RouteRenderer {
-  return ({ root: routeRoot, onRendered }) => {
+  return ({ root: routeRoot, location, onRendered }) => {
     const Component = component as React.ElementType;
     if (!reactRouteRoot) {
       routeRoot.replaceChildren();
@@ -474,7 +488,9 @@ function createReactRouteRenderer(component: unknown): RouteRenderer {
           React.createElement(
             React.Suspense,
             { fallback: null },
-            React.createElement(Component),
+            // The sandbox has no react-router provider, so the component gets
+            // the host location as a prop (re-passed on each navigation).
+            React.createElement(Component, { location }),
             React.createElement(RouteRenderCommit, { onRendered: handleRendered }),
           ),
         );
@@ -541,15 +557,17 @@ function createContext() {
     router: {
       add(route: LegacyRouteConfig) {
         const normalizedRoute = normalizeRoute(route);
-        if (typeof route?.render === "function") {
+        // `component` is preferred (host manages the single React root); `render`
+        // is the legacy imperative escape hatch. When both are set, component wins.
+        if (route?.component) {
+          routes.set(normalizedRoute.routeId, createReactRouteRenderer(route.component));
+        } else if (typeof route?.render === "function") {
           routes.set(normalizedRoute.routeId, async (context) => {
             unmountReactRouteRoot();
             await (route.render as RouteRenderer)(context);
           });
-        } else if (route?.component) {
-          routes.set(normalizedRoute.routeId, createReactRouteRenderer(route.component));
         } else {
-          throw new Error("Sandboxed addon routes must provide render(context) or component");
+          throw new Error("Sandboxed addon routes must provide component or render(context)");
         }
         return callHost("router.add", { route: normalizedRoute }).catch((error: unknown) => {
           routes.delete(normalizedRoute.routeId);

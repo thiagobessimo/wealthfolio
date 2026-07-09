@@ -95,6 +95,7 @@ fn sync_entity_name(entity: &SyncEntity) -> &'static str {
         SyncEntity::BudgetGroupAssignment => "budget_group_assignment",
         SyncEntity::BudgetTarget => "budget_target",
         SyncEntity::BudgetRolloverSetting => "budget_rollover_setting",
+        SyncEntity::AddonStorage => "addon_storage",
     }
 }
 

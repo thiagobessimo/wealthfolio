@@ -2,6 +2,7 @@
 
 import { vi, describe, it, expect } from "vitest";
 import { createPermissionGuard, createSDKHostAPIBridge, type InternalHostAPI } from "./type-bridge";
+import { isBaselineCategory } from "@wealthfolio/addon-sdk";
 
 describe("Addon Type Bridge", () => {
   describe("createSDKHostAPIBridge", () => {
@@ -132,19 +133,29 @@ describe("Addon Type Bridge", () => {
       }
     });
 
-    it("should allow legacy addon navigation when router permission is granted", () => {
-      const guard = createPermissionGuard("test-addon", [
-        {
-          category: "ui",
-          purpose: "Navigation",
-          functions: [{ name: "router.add", isDeclared: true, isDetected: false }],
-        },
-      ]);
-
-      expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
+    it("treats ui/query and other baseline capabilities as baseline categories", () => {
+      expect(isBaselineCategory("ui")).toBe(true);
+      expect(isBaselineCategory("query")).toBe(true);
+      expect(isBaselineCategory("toast")).toBe(true);
+      expect(isBaselineCategory("logger")).toBe(true);
+      expect(isBaselineCategory("storage")).toBe(true);
+      expect(isBaselineCategory("accounts")).toBe(false);
     });
 
-    it("should support legacy string function permissions from raw manifests", () => {
+    it("allows baseline capabilities without any declared permission", () => {
+      const guard = createPermissionGuard("test-addon", []);
+
+      // Baseline categories are implicit — allowed with no declaration and never throw.
+      expect(guard.canUse("ui", "sidebar.addItem")).toBe(true);
+      expect(guard.canUse("ui", "router.add")).toBe(true);
+      expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
+      expect(guard.canUse("query", "invalidateQueries")).toBe(true);
+      expect(guard.canUse("query", "refetchQueries")).toBe(true);
+      expect(() => guard.assertCanUse("ui", "sidebar.addItem")).not.toThrow();
+      expect(() => guard.assertCanUse("query", "invalidateQueries")).not.toThrow();
+    });
+
+    it("still allows baseline capabilities even when a legacy manifest declares them", () => {
       const guard = createPermissionGuard("test-addon", [
         {
           category: "ui",
@@ -154,19 +165,6 @@ describe("Addon Type Bridge", () => {
       ] as unknown as Parameters<typeof createPermissionGuard>[1]);
 
       expect(guard.canUse("ui", "sidebar.addItem")).toBe(true);
-      expect(guard.canUse("ui", "router.add")).toBe(true);
-      expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
-    });
-
-    it("should treat missing isDeclared as declared for object function permissions", () => {
-      const guard = createPermissionGuard("test-addon", [
-        {
-          category: "ui",
-          purpose: "Navigation",
-          functions: [{ name: "router.add" }],
-        },
-      ] as unknown as Parameters<typeof createPermissionGuard>[1]);
-
       expect(guard.canUse("ui", "router.add")).toBe(true);
       expect(guard.canUse("ui", "navigation.navigate")).toBe(true);
     });

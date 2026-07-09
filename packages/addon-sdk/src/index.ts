@@ -35,6 +35,7 @@ export type {
   NetworkRequest,
   NetworkResponse,
   SnapshotsAPI,
+  StorageAPI,
   ToastAPI,
   DividendEvent,
   FetchDividendsOptions,
@@ -50,6 +51,9 @@ export type * from './data-types';
 // Manifest and metadata types
 export type {
   AddonFile,
+  AddonContributedLink,
+  AddonContributedRoute,
+  AddonContributes,
   AddonHostDependencies,
   AddonInstallResult,
   AddonManifest,
@@ -74,9 +78,11 @@ export type {
 } from './permissions';
 
 export {
+  BASELINE_PERMISSION_CATEGORIES,
   getFunctionRiskLevel,
   getPermissionCategoriesByRisk,
   getPermissionCategory,
+  isBaselineCategory,
   isPermissionRequired,
   PERMISSION_CATEGORIES,
 } from './permissions';

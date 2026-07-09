@@ -106,12 +106,6 @@ export const FUNCTION_DISPLAY_NAMES: Record<string, string> = {
   "events.market.onSyncStart": "Monitor market sync start",
   "events.market.onSyncComplete": "Monitor market sync completion",
 
-  // UI functions (addon extensions) - these use dotted notation in backend detection
-  "ui.sidebar.addItem": "Add navigation items",
-  "ui.router.add": "Add new pages",
-  "ui.navigation.navigate": "Navigate within the app",
-  "ui.onDisable": "Run cleanup when disabled",
-
   // Network broker
   "network.request": "Send brokered network requests",
 };

@@ -16,6 +16,7 @@ import type {
   PermissionCategory,
   RiskLevel,
 } from "@wealthfolio/addon-sdk";
+import { isBaselineCategory } from "@wealthfolio/addon-sdk";
 import { AlertFeedback } from "@wealthfolio/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -31,6 +32,7 @@ interface PermissionDialogProps {
   onApprove: (approvedNetworkHosts: string[]) => void;
   onDeny: () => void;
   isViewOnly?: boolean;
+  canEditNetworkHosts?: boolean;
 }
 
 const getWarningVariantByFunctionCount = (
@@ -54,6 +56,7 @@ export function PermissionDialog({
   onApprove,
   onDeny,
   isViewOnly = false,
+  canEditNetworkHosts = false,
 }: PermissionDialogProps) {
   const { t } = useTranslation();
   const networkHosts = useMemo(() => {
@@ -67,6 +70,7 @@ export function PermissionDialog({
   const [approvedNetworkHosts, setApprovedNetworkHosts] = useState<string[]>(
     defaultApprovedNetworkHosts,
   );
+  const canManageNetworkHosts = isViewOnly && canEditNetworkHosts && networkHosts.length > 0;
 
   useEffect(() => {
     if (open) {
@@ -89,17 +93,19 @@ export function PermissionDialog({
   }
 
   // For installation (not view-only), use manifest permissions
-  // For view-only, use declared permissions passed in
-  const permissionsToDisplay = isViewOnly ? declaredPermissions : manifest.permissions || [];
+  // For view-only, use declared permissions passed in.
+  // Baseline capabilities (ui/query/toast/logger/storage) are implicit and never
+  // consent-surfaced, so they are filtered out here — this also hides legacy
+  // manifests that still declare them.
+  const permissionsToDisplay = (
+    isViewOnly ? declaredPermissions : manifest.permissions || []
+  ).filter((permission) => !isBaselineCategory(permission.category));
 
-  // Calculate total function count from all permissions (excluding UI category)
-  const totalFunctionCount = permissionsToDisplay.reduce((total, permission) => {
-    // Exclude 'ui' category from the count as it's low risk
-    if (permission.category === "ui") {
-      return total;
-    }
-    return total + permission.functions.length;
-  }, 0);
+  // Calculate total function count from all permissions
+  const totalFunctionCount = permissionsToDisplay.reduce(
+    (total, permission) => total + permission.functions.length,
+    0,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -158,7 +164,7 @@ export function PermissionDialog({
                     >
                       <Checkbox
                         checked={checked}
-                        disabled={isViewOnly}
+                        disabled={isViewOnly && !canManageNetworkHosts}
                         onCheckedChange={(value) => toggleNetworkHost(host, value)}
                       />
                       <span className="min-w-0 flex-1 truncate font-mono text-xs">{host}</span>
@@ -179,10 +185,23 @@ export function PermissionDialog({
 
         <DialogFooter className="gap-3">
           {isViewOnly ? (
-            <Button onClick={() => onApprove(approvedNetworkHosts)}>
-              <Icons.Check className="mr-2 h-4 w-4" />
-              {t("settings:addon_permission_close")}
-            </Button>
+            canManageNetworkHosts ? (
+              <>
+                <Button variant="outline" onClick={onDeny}>
+                  <Icons.Close className="mr-2 h-4 w-4" />
+                  {t("settings:common_close")}
+                </Button>
+                <Button onClick={() => onApprove(approvedNetworkHosts)}>
+                  <Icons.Check className="mr-2 h-4 w-4" />
+                  {t("settings:common_save")}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => onApprove(approvedNetworkHosts)}>
+                <Icons.Check className="mr-2 h-4 w-4" />
+                {t("settings:addon_permission_close")}
+              </Button>
+            )
           ) : (
             <>
               <Button variant="outline" onClick={onDeny}>

@@ -8,6 +8,8 @@ pub const APP_SYNC_TABLES: &[&str] = &[
     // Base tables (no FK deps)
     "platforms",
     "assets",
+    // Per-addon key-value storage. Composite PK (addon_id, key), no FK deps.
+    "addon_storage",
     // No FK deps
     "market_data_custom_providers",
     // Depends on: assets
@@ -121,6 +123,8 @@ pub enum SyncEntity {
     BudgetGroupAssignment,
     BudgetTarget,
     BudgetRolloverSetting,
+    // Per-addon key-value storage (composite PK). Custom apply branch.
+    AddonStorage,
 }
 
 /// Supported sync operations.
@@ -361,6 +365,7 @@ mod tests {
             SyncEntity::BudgetGroupAssignment,
             SyncEntity::BudgetTarget,
             SyncEntity::BudgetRolloverSetting,
+            SyncEntity::AddonStorage,
         ]
         .iter()
         .map(|entity| serde_json::to_string(entity).expect("serialize sync entity"))
@@ -403,6 +408,7 @@ mod tests {
             "\"budget_group_assignment\"",
             "\"budget_target\"",
             "\"budget_rollover_setting\"",
+            "\"addon_storage\"",
         ];
 
         assert_eq!(actual, expected);

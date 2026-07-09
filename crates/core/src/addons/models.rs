@@ -30,6 +30,46 @@ pub struct AddonPermission {
     pub purpose: String,
 }
 
+/// A durable addon page declared via `contributes.routes`. Ingested at boot
+/// without executing addon code — the lazy-activation surface.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonContributedRoute {
+    pub id: String,
+    /// Optional suffix below the host-owned `/addons/<addon-id>` mount.
+    /// `None` represents the addon root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// A placement in a host slot (e.g. `"sidebar"`) declared via
+/// `contributes.links`, pointing at a declared route of the same addon.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonContributedLink {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub route: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<i32>,
+}
+
+/// Declarative contributions an addon makes to the host: durable routes plus
+/// links placed in host slots (map keyed by slot id; BTreeMap keeps
+/// serialization deterministic). Unknown slot keys round-trip untouched —
+/// they're future host surfaces.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonContributes {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<AddonContributedRoute>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub links: BTreeMap<String, Vec<AddonContributedLink>>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddonNetworkAccess {
@@ -64,6 +104,8 @@ pub struct AddonManifest {
     pub network: Option<AddonNetworkAccess>,
     #[serde(rename = "hostDependencies")]
     pub host_dependencies: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contributes: Option<AddonContributes>,
 
     // Runtime fields (only present after installation)
     #[serde(skip_serializing_if = "Option::is_none")]

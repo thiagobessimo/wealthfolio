@@ -1,6 +1,7 @@
 import { logger } from "@/adapters";
 import { reloadAllAddons } from "@/addons/addons-core";
 import type { AddonManifest } from "@wealthfolio/addon-sdk";
+import { clearAddonContributions, ingestAddonContributions } from "./contribution-registry";
 import { addonIframeManager, type AddonRuntimeHandle } from "./iframe/addon-iframe-manager";
 
 interface DevModeConfig {
@@ -171,6 +172,16 @@ class AddonDevManager {
 
       // Execute addon code in development context
       await this.executeAddonCode(addonCode, manifest, addonId);
+
+      // Dev addons don't flow through loadInstalledAddons, so ingest their
+      // manifest contributions here — otherwise a scaffolded addon's declarative
+      // sidebar link (contributes.links) never appears in dev mode, since the
+      // new template registers only the route at runtime. Clear-then-ingest keeps
+      // this idempotent across hot-reloads (a renamed/removed link doesn't linger).
+      clearAddonContributions(addonId);
+      if (manifest) {
+        ingestAddonContributions(addonId, manifest as AddonManifest);
+      }
 
       devServer.status = "running";
       devServer.lastUpdated = new Date();
@@ -363,8 +374,11 @@ class AddonDevManager {
       this.eventSource = null;
     }
 
-    for (const [, instance] of this.devAddons) {
+    for (const [addonId, instance] of this.devAddons) {
       void instance.disable();
+      // Drop the durable nav/routes ingested on load so disabling dev mode
+      // doesn't leave a stale sidebar entry behind.
+      clearAddonContributions(addonId);
     }
     this.devAddons.clear();
   }

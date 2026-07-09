@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    error::{ApiError, ApiResult},
-    main_lib::AppState,
-};
+use crate::{error::ApiResult, main_lib::AppState};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -33,20 +30,10 @@ struct AddonIdBody {
     addon_id: String,
 }
 
-fn ensure_addon_management_auth(state: &AppState) -> ApiResult<()> {
-    if state.auth.is_none() {
-        return Err(ApiError::Unauthorized(
-            "Addon management requires authentication".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 async fn install_addon_zip_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<InstallZipBody>,
 ) -> ApiResult<Json<AddonManifest>> {
-    ensure_addon_management_auth(&state)?;
     let zip_bytes = decode_zip_data(body.zip_data, body.zip_data_b64)?;
     let metadata = state
         .addon_service
@@ -74,7 +61,6 @@ async fn check_addon_update_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AddonIdBody>,
 ) -> ApiResult<Json<AddonUpdateCheckResult>> {
-    ensure_addon_management_auth(&state)?;
     let result = state
         .addon_service
         .check_addon_update(&body.addon_id)
@@ -86,7 +72,6 @@ async fn check_addon_update_web(
 async fn check_all_addon_updates_web(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<Vec<AddonUpdateCheckResult>>> {
-    ensure_addon_management_auth(&state)?;
     let results = state
         .addon_service
         .check_all_addon_updates()
@@ -106,7 +91,6 @@ async fn toggle_addon_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ToggleBody>,
 ) -> ApiResult<StatusCode> {
-    ensure_addon_management_auth(&state)?;
     state
         .addon_service
         .toggle_addon(&body.addon_id, body.enabled)
@@ -118,7 +102,6 @@ async fn uninstall_addon_web(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StatusCode> {
-    ensure_addon_management_auth(&state)?;
     state
         .addon_service
         .uninstall_addon(&id)
@@ -160,7 +143,6 @@ async fn extract_addon_zip_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ExtractBody>,
 ) -> ApiResult<Json<ExtractedAddon>> {
-    ensure_addon_management_auth(&state)?;
     let zip_bytes = decode_zip_data(body.zip_data, body.zip_data_b64)?;
     let extracted = state
         .addon_service
@@ -194,7 +176,6 @@ async fn submit_addon_rating_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SubmitRatingBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    ensure_addon_management_auth(&state)?;
     let resp = state
         .addon_service
         .submit_rating(&body.addon_id, body.rating, body.review)
@@ -224,7 +205,6 @@ async fn download_addon_to_staging_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<StagingDownloadBody>,
 ) -> ApiResult<Json<ExtractedAddon>> {
-    ensure_addon_management_auth(&state)?;
     let extracted = state
         .addon_service
         .download_addon_to_staging(&body.addon_id)
@@ -243,11 +223,18 @@ struct InstallFromStagingBody {
     approved_network_hosts: Option<Vec<String>>,
 }
 
+#[derive(serde::Deserialize)]
+struct UpdateNetworkApprovalsBody {
+    #[serde(rename = "addonId")]
+    addon_id: String,
+    #[serde(rename = "approvedNetworkHosts")]
+    approved_network_hosts: Vec<String>,
+}
+
 async fn update_addon_from_store_by_id_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AddonIdBody>,
 ) -> ApiResult<Json<AddonManifest>> {
-    ensure_addon_management_auth(&state)?;
     let metadata = state
         .addon_service
         .update_addon_from_store(&body.addon_id)
@@ -256,11 +243,21 @@ async fn update_addon_from_store_by_id_web(
     Ok(Json(metadata))
 }
 
+async fn update_addon_network_approvals_web(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UpdateNetworkApprovalsBody>,
+) -> ApiResult<Json<AddonManifest>> {
+    let metadata = state
+        .addon_service
+        .update_addon_network_approvals(&body.addon_id, body.approved_network_hosts)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(Json(metadata))
+}
+
 async fn install_addon_from_staging_web(
     State(state): State<Arc<AppState>>,
     Json(body): Json<InstallFromStagingBody>,
 ) -> ApiResult<Json<AddonManifest>> {
-    ensure_addon_management_auth(&state)?;
     let metadata = state
         .addon_service
         .install_addon_from_staging(
@@ -277,10 +274,53 @@ async fn clear_addon_staging_web(
     State(state): State<Arc<AppState>>,
     Query(rq): Query<RatingsQuery>,
 ) -> ApiResult<StatusCode> {
-    ensure_addon_management_auth(&state)?;
     state
         .addon_service
         .clear_staging(rq.addon_id.as_deref())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ====== Addon key-value storage ======
+
+#[derive(serde::Deserialize)]
+struct StorageSetBody {
+    value: String,
+}
+
+async fn get_addon_storage_item_web(
+    Path((addon_id, key)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<Option<String>>> {
+    let value = state
+        .addon_service
+        .get_addon_storage_item(&addon_id, &key)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(Json(value))
+}
+
+async fn set_addon_storage_item_web(
+    Path((addon_id, key)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<StorageSetBody>,
+) -> ApiResult<StatusCode> {
+    state
+        .addon_service
+        .set_addon_storage_item(&addon_id, &key, &body.value)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_addon_storage_item_web(
+    Path((addon_id, key)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StatusCode> {
+    state
+        .addon_service
+        .delete_addon_storage_item(&addon_id, &key)
+        .await
         .map_err(|e| anyhow::anyhow!(e))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -336,5 +376,15 @@ pub fn router() -> Router<Arc<AppState>> {
             "/addons/store/install-from-staging",
             post(install_addon_from_staging_web),
         )
+        .route(
+            "/addons/network-approvals",
+            post(update_addon_network_approvals_web),
+        )
         .route("/addons/store/staging", delete(clear_addon_staging_web))
+        .route(
+            "/addons/storage/{addon_id}/{key}",
+            get(get_addon_storage_item_web)
+                .put(set_addon_storage_item_web)
+                .delete(delete_addon_storage_item_web),
+        )
 }

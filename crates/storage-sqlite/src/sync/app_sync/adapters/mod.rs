@@ -159,5 +159,9 @@ pub fn default_adapter_descriptors() -> Vec<EntityAdapterDescriptor> {
             entity: SyncEntity::BudgetRolloverSetting,
             table_name: "budget_rollover_settings",
         },
+        EntityAdapterDescriptor {
+            entity: SyncEntity::AddonStorage,
+            table_name: "addon_storage",
+        },
     ]
 }

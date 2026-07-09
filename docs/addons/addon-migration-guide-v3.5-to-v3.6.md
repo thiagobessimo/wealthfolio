@@ -76,6 +76,60 @@ Notes:
 - `RouteConfig` also gained optional `id` (stable route id) and `title` (used
   for diagnostics).
 
+### Preferred (3.6.1+): `component` instead of `render`
+
+Managing the React root by hand is the #1 source of breakage — a per-route
+`createRoot` (or one root per route) leaves an **orphaned tree** whose
+re-renders never reach the DOM, so buttons and navigation silently stop working.
+As of 3.6.1 you can hand the host a component and let it own the single root:
+
+```tsx
+import { MainPage } from "./pages/MainPage";
+
+export default function enable(ctx: AddonContext) {
+  ctx.router.add({
+    path: "/addon/my-addon",
+    component: MainPage, // host mounts/unmounts this in its managed root
+  });
+}
+```
+
+- Provide **exactly one** of `component` or `render`. If both are set,
+  `component` wins; if neither, the host rejects the route.
+- With `component`, do **not** call `createRoot` yourself and you don't need an
+  `onDisable` unmount for the route — the host manages the lifecycle.
+- The sandbox has **no react-router provider**, so do not call `useLocation()` /
+  `useParams()` inside a `component` route — they throw. The host passes the
+  current location as a **prop** (`{ location }`, an `AddonRouteLocation` with
+  `pathname/search/hash/params`), re-passed on each navigation.
+- Prefer `component`; keep `render` only for non-React or imperative rendering.
+
+> **`contributes.routes` + `contributes.links`:** addons can declare their pages
+> and navigation in the manifest, so the host knows them without booting the
+> addon. A **route** is a durable addon page; a **link** places it in a host
+> slot (only `"sidebar"` is consumed today) and must reference a declared route
+> id of the same addon:
+>
+> ```jsonc
+> "contributes": {
+>   "routes": [ { "id": "main" } ],
+>   "links": {
+>     "sidebar": [
+>       { "id": "main-nav", "route": "main", "label": "My Addon", "icon": "wallet", "order": 150 }
+>     ]
+>   }
+> }
+> ```
+>
+> The host mounts that root route at `/addons/<manifest.id>`. For a nested page,
+> provide only a relative suffix such as `"path": "reports/:year"`; absolute
+> paths are rejected.
+>
+> If you declare a route and also register its renderer at runtime, the runtime
+> `router.add({ id })` **must use the same id** as the declared route
+> (`contributes.routes[].id`). A mismatch renders a blank page ("route is not
+> available"). A route without any link is legal — it is deep-link only.
+
 ---
 
 ## 2. React is no longer an SDK export
@@ -302,7 +356,35 @@ broker reads it by `secretKey` so the raw token never enters addon code paths.
 
 ---
 
-## 7. Testing your migration
+## 7. New capability: durable storage (replaces `localStorage`)
+
+`localStorage`/`sessionStorage` throw in the opaque-origin sandbox — the common
+cause of a "Save" button that silently does nothing in 3.6. Use the durable
+storage API instead. It's a **baseline capability** (no `permissions` entry),
+per-addon scoped, survives updates, is cleared on uninstall, and replicates
+across the user's paired devices.
+
+```ts
+// before (throws in the sandbox)
+localStorage.setItem("prefs", JSON.stringify(prefs));
+const prefs = JSON.parse(localStorage.getItem("prefs") ?? "{}");
+
+// after
+await ctx.api.storage.set("prefs", JSON.stringify(prefs));
+const raw = await ctx.api.storage.get("prefs"); // string | null
+const prefs = raw ? JSON.parse(raw) : {};
+```
+
+The API is async (`get`/`set`/`delete` all return promises). Constraints:
+
+- **Keys**: ≤ 128 chars, charset `[A-Za-z0-9_.:-]`.
+- **Values**: ~250 KB each. Because storage syncs across devices, `set` rejects
+  an oversized value rather than failing silently later — split large data
+  across keys, and don't put device-local caches in storage.
+
+---
+
+## 8. Testing your migration
 
 1. **Build**: `pnpm build` — confirm `addon.js` does **not** bundle React
    (externalized) and TypeScript compiles.
@@ -316,7 +398,7 @@ broker reads it by `secretKey` so the raw token never enters addon code paths.
 
 ---
 
-## 8. Common issues
+## 9. Common issues
 
 | Symptom                                        | Cause / fix                                                                                   |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -326,10 +408,12 @@ broker reads it by `secretKey` so the raw token never enters addon code paths.
 | `React is undefined` / `ReactDOM is undefined` | Removed SDK exports. Import from `react` / `react-dom/client` directly.                       |
 | Sidebar icon missing                           | `icon` must be a host icon name string, not a React node.                                     |
 | `fetch` blocked                                | Use `ctx.api.network.request()` with the host declared in `manifest.network.allowedHosts`.    |
+| `SecurityError` / dead Save button             | `localStorage`/`sessionStorage` throw in the sandbox — use `ctx.api.storage` (step 7).        |
+| Storage `set` rejects a value                  | Value exceeds ~250 KB. Split across keys; storage syncs across devices, which bounds size.    |
 
 ---
 
-## 9. Need help
+## 10. Need help
 
 - [API Reference](./addon-api-reference.md)
 - [Architecture Guide](./addon-architecture.md)
