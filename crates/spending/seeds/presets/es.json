@@ -8,7 +8,7 @@
     {
       "key": "es.groceries.major_chains",
       "name": "Groceries — major chains",
-      "pattern": "(?i)mercadona|carrefour|\\beroski\\b|\\balcampo\\b|\\bd[ií]a\\b|\\blidl\\b|\\baldi\\b|\\bconsum\\b|hipercor|caprabo|\\bcondis\\b|ahorramas|\\bgadis\\b|bm supermercados|covir[aá]n|\\bspar\\b|\\bfroiz\\b|superc[oó]r|simply market|supersol|family cash",
+      "pattern": "(?i)mercadona|carrefour|\\beroski\\b|\\balcampo\\b|supermercados? d[ií]a\\b|\\bdia s\\.?a\\.?\\b|\\blidl\\b|\\baldi\\b|\\bconsum\\b|hipercor|caprabo|\\bcondis\\b|ahorramas|\\bgadis\\b|bm supermercados|covir[aá]n|\\bspar\\b|\\bfroiz\\b|superc[oó]r|simply market|supersol|family cash|bonpreu|\\besclat\\b|alimerka|\\bmasymas\\b|e\\.?leclerc|bon [aà]rea",
       "matchType": "regex",
       "categoryKey": "groceries",
       "priority": 80
@@ -16,7 +16,7 @@
     {
       "key": "es.department_stores",
       "name": "Department stores",
-      "pattern": "(?i)el corte ingl[eé]s|\\becis\\b",
+      "pattern": "(?i)el corte ingl[eé]s|\\beci\\b",
       "matchType": "regex",
       "categoryKey": "shopping",
       "priority": 75
@@ -64,7 +64,7 @@
     {
       "key": "es.transit",
       "name": "Public transit & rail",
-      "pattern": "(?i)\\brenfe\\b|cercan[ií]as|metro madrid|metro barcelona|metrovalencia|\\bemt\\b|\\btmb\\b|\\balsa\\b|\\bfgc\\b|abono transporte",
+      "pattern": "(?i)\\brenfe\\b|cercan[ií]as|rodalies|metro madrid|metro barcelona|metro bilbao|metrovalencia|euskotren|tranv[ií]a|\\bemt\\b|\\btmb\\b|\\balsa\\b|\\bfgc\\b|abono transporte",
       "matchType": "regex",
       "categoryKey": "transport_public",
       "priority": 80
@@ -136,7 +136,7 @@
     {
       "key": "es.streaming",
       "name": "Streaming services",
-      "pattern": "(?i)\\bnetflix\\b|\\bspotify\\b|hbo max|disney ?\\+|movistar ?\\+|amazon prime video|\\bdazn\\b",
+      "pattern": "(?i)\\bnetflix\\b|\\bspotify\\b|hbo max|disney ?\\+|movistar ?\\+|amazon prime video|\\bdazn\\b|\\bfilmin\\b|atresplayer|apple tv ?\\+|paramount ?\\+",
       "matchType": "regex",
       "categoryKey": "entertainment_streaming",
       "priority": 85
