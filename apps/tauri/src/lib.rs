@@ -116,7 +116,7 @@ mod desktop {
     use super::*;
 
     /// Sets up the application menu and its event handler.
-    pub fn setup_menu(handle: &AppHandle, instance_id: &Arc<String>) {
+    pub fn setup_menu(handle: &AppHandle) {
         match menu::create_menu(handle) {
             Ok(menu) => {
                 if let Err(e) = handle.set_menu(menu) {
@@ -128,9 +128,8 @@ mod desktop {
             }
         }
 
-        let instance_id = Arc::clone(instance_id);
         handle.on_menu_event(move |app, event| {
-            menu::handle_menu_event(app, &instance_id, event.id().as_ref());
+            menu::handle_menu_event(app, event.id().as_ref());
         });
     }
 
@@ -179,7 +178,7 @@ mod desktop {
         });
 
         // Menu setup is synchronous (no I/O)
-        setup_menu(&handle, &context.instance_id);
+        setup_menu(&handle);
 
         // Notify frontend that app is ready
         // The frontend will trigger the initial portfolio update and update check after it's mounted

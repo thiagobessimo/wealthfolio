@@ -30,7 +30,7 @@ use crate::services::ConnectService;
 pub struct ServiceContext {
     pub base_currency: Arc<RwLock<String>>,
     pub timezone: Arc<RwLock<String>>,
-    pub instance_id: Arc<String>,
+    pub rating_instance_id: Arc<String>,
 
     /// Domain event sink for emitting events after mutations.
     /// Runtime bridges (Tauri/Web) implement this to trigger portfolio recalculation,

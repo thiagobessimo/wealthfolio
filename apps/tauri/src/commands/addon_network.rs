@@ -25,7 +25,7 @@ pub async fn addon_network_request(
     request.injected_authorization = injected_authorization;
     AddonService::new(
         app_data_dir,
-        state.instance_id.as_str(),
+        state.rating_instance_id.as_str(),
         state.addon_storage_repository.clone(),
     )
     .addon_network_request(&addon_id, request)

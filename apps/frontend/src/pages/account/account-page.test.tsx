@@ -470,7 +470,6 @@ function createSettings(): Settings {
     baseCurrency: "USD",
     defaultReturnMetric: "twr",
     timezone: "America/Chicago",
-    instanceId: "test-instance",
     onboardingCompleted: true,
     autoUpdateCheckEnabled: true,
     menuBarVisible: true,

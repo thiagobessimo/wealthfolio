@@ -103,7 +103,6 @@ pub struct AppState {
     pub ai_chat_service: Arc<ChatService<ServerAiEnvironment>>,
     pub data_root: String,
     pub db_path: String,
-    pub instance_id: String,
     pub secret_store: Arc<dyn SecretStore>,
     pub event_bus: EventBus,
     pub auth: Option<Arc<AuthManager>>,
@@ -293,6 +292,9 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
     let settings = settings_service.get_settings()?;
     let base_currency = Arc::new(RwLock::new(settings.base_currency));
     let timezone = Arc::new(RwLock::new(settings.timezone.clone()));
+    let rating_instance_id = settings_service
+        .get_setting_value("instance_id")?
+        .ok_or_else(|| anyhow::anyhow!("Missing internal instance ID"))?;
 
     let spending_settings_repo: Arc<
         dyn wealthfolio_spending::settings::SpendingSettingsRepositoryTrait,
@@ -809,7 +811,7 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         Arc::new(AddonStorageRepository::new(pool.clone(), writer.clone()));
     let addon_service: Arc<dyn AddonServiceTrait + Send + Sync> = Arc::new(AddonService::new(
         &config.addons_root,
-        &settings.instance_id,
+        rating_instance_id,
         addon_storage_repository,
     ));
 
@@ -856,7 +858,6 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
         ai_chat_service,
         data_root,
         db_path,
-        instance_id: settings.instance_id,
         secret_store,
         event_bus,
         auth: auth_manager,

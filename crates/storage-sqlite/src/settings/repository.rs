@@ -41,7 +41,6 @@ impl SettingsRepositoryTrait for SettingsRepository {
                 "language" => settings.language = value,
                 "base_currency" => settings.base_currency = value,
                 "timezone" => settings.timezone = value,
-                "instance_id" => settings.instance_id = value,
                 "onboarding_completed" => {
                     settings.onboarding_completed = value.parse().unwrap_or(false);
                 }

@@ -17,7 +17,7 @@ fn addon_service(app_handle: &AppHandle, state: &ServiceContext) -> Result<Addon
 
     Ok(AddonService::new(
         app_data_dir,
-        state.instance_id.as_str(),
+        state.rating_instance_id.as_str(),
         state.addon_storage_repository.clone(),
     ))
 }
@@ -99,12 +99,9 @@ pub async fn extract_addon_zip(
 pub async fn check_addon_update(
     addon_id: String,
     current_version: String,
-    state: State<'_, Arc<ServiceContext>>,
 ) -> Result<AddonUpdateCheckResult, String> {
-    let instance_id = state.instance_id.as_str();
     // Check for updates from addon store
-    match addons::check_addon_update_from_api(&addon_id, &current_version, Some(instance_id)).await
-    {
+    match addons::check_addon_update_from_api(&addon_id, &current_version).await {
         Ok(update_check_result) => {
             // The API already provides the complete result, just return it
             Ok(update_check_result)
@@ -143,16 +140,10 @@ pub async fn check_all_addon_updates(
     state: State<'_, Arc<ServiceContext>>,
 ) -> Result<Vec<AddonUpdateCheckResult>, String> {
     let mut results = Vec::new();
-    let instance_id = state.instance_id.as_str();
     let installed_addons = addon_service(&app_handle, &state)?.list_installed_addons()?;
 
     for addon in installed_addons {
-        match addons::check_addon_update_from_api(
-            &addon.metadata.id,
-            &addon.metadata.version,
-            Some(instance_id),
-        )
-        .await
+        match addons::check_addon_update_from_api(&addon.metadata.id, &addon.metadata.version).await
         {
             Ok(result) => results.push(result),
             Err(error) => {
@@ -201,10 +192,9 @@ pub async fn update_addon_from_store_by_id(
 /// Fetch available addons from the store
 #[tauri::command]
 pub async fn fetch_addon_store_listings(
-    state: State<'_, Arc<ServiceContext>>,
+    _state: State<'_, Arc<ServiceContext>>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let instance_id = state.instance_id.as_str();
-    addons::fetch_addon_store_listings(Some(instance_id)).await
+    addons::fetch_addon_store_listings().await
 }
 
 /// Download addon to staging directory for permission review
@@ -266,8 +256,8 @@ pub async fn submit_addon_rating(
     review: Option<String>,
     state: State<'_, Arc<ServiceContext>>,
 ) -> Result<serde_json::Value, String> {
-    let instance_id = state.instance_id.as_str();
-    addons::submit_addon_rating(&addon_id, rating, review, instance_id).await
+    let rating_instance_id = state.rating_instance_id.as_str();
+    addons::submit_addon_rating(&addon_id, rating, review, rating_instance_id).await
 }
 
 /// Get a value from the addon's persistent key-value storage

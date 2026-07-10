@@ -494,12 +494,7 @@ pub async fn get_app_info(app_handle: AppHandle) -> Result<AppInfo, String> {
 pub async fn check_for_updates(app_handle: AppHandle) -> Result<Option<serde_json::Value>, String> {
     #[cfg(desktop)]
     {
-        let instance_id = app_handle
-            .try_state::<std::sync::Arc<ServiceContext>>()
-            .map(|state| state.instance_id.clone())
-            .ok_or_else(|| "Failed to access service context".to_string())?;
-
-        let result = check_for_update(app_handle, &instance_id).await?;
+        let result = check_for_update(app_handle).await?;
         Ok(result.map(|info| serde_json::to_value(info).unwrap()))
     }
     #[cfg(not(desktop))]

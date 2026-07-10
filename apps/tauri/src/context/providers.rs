@@ -173,7 +173,11 @@ pub async fn initialize_context(
     let base_currency_string = settings.base_currency.clone();
     let base_currency = Arc::new(RwLock::new(base_currency_string.clone()));
     let timezone = Arc::new(RwLock::new(settings.timezone.clone()));
-    let instance_id = Arc::new(settings.instance_id.clone());
+    let rating_instance_id = Arc::new(
+        settings_service
+            .get_setting_value("instance_id")?
+            .ok_or_else(|| std::io::Error::other("Missing internal instance ID"))?,
+    );
 
     let secret_store = shared_secret_store();
 
@@ -596,7 +600,7 @@ pub async fn initialize_context(
         context: ServiceContext {
             base_currency,
             timezone,
-            instance_id,
+            rating_instance_id,
             domain_event_sink,
             settings_service,
             account_service,

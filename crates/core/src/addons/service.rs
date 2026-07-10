@@ -55,7 +55,6 @@ fn create_request_with_headers(
     client: &reqwest::Client,
     method: reqwest::Method,
     url: &str,
-    instance_id: Option<&str>,
 ) -> reqwest::RequestBuilder {
     let mut request = client.request(method, url);
 
@@ -71,11 +70,6 @@ fn create_request_with_headers(
     // Add X-App-Version header only if version is available
     if let Some(version) = app_version {
         request = request.header("X-App-Version", version);
-    }
-
-    // Add instance ID header if provided
-    if let Some(instance_id) = instance_id {
-        request = request.header("X-Instance-Id", instance_id);
     }
 
     request
@@ -1298,7 +1292,6 @@ pub fn read_addon_files_recursive(
 pub async fn check_addon_update_from_api(
     addon_id: &str,
     current_version: &str,
-    instance_id: Option<&str>,
 ) -> Result<AddonUpdateCheckResult, String> {
     validate_addon_id(addon_id)?;
     let api_url = format!(
@@ -1307,14 +1300,13 @@ pub async fn check_addon_update_from_api(
     );
 
     let client = reqwest::Client::new();
-    let response =
-        create_request_with_headers(&client, reqwest::Method::GET, &api_url, instance_id)
-            .send()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to fetch addon info from API: {}", e);
-                format!("Failed to fetch addon info from API: {}", e)
-            })?;
+    let response = create_request_with_headers(&client, reqwest::Method::GET, &api_url)
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to fetch addon info from API: {}", e);
+            format!("Failed to fetch addon info from API: {}", e)
+        })?;
 
     handle_api_response(response, "Update check").await
 }
@@ -1472,10 +1464,7 @@ pub fn clear_staging_directory(base_dir: impl AsRef<Path>) -> Result<(), String>
 }
 
 /// Download addon from store using GET request
-pub async fn download_addon_from_store(
-    addon_id: &str,
-    instance_id: &str,
-) -> Result<Vec<u8>, String> {
+pub async fn download_addon_from_store(addon_id: &str) -> Result<Vec<u8>, String> {
     validate_addon_id(addon_id)?;
     let download_api_url = format!("{}/{}/download", ADDON_STORE_API_BASE_URL, addon_id);
 
@@ -1484,21 +1473,14 @@ pub async fn download_addon_from_store(
         addon_id,
         download_api_url
     );
-    log::debug!("Using instance ID: {}", instance_id);
-
     let client = reqwest::Client::new();
-    let response = create_request_with_headers(
-        &client,
-        reqwest::Method::GET,
-        &download_api_url,
-        Some(instance_id),
-    )
-    .send()
-    .await
-    .map_err(|e| {
-        log::error!("Failed to call download API for addon {}: {}", addon_id, e);
-        format!("Failed to call download API: {}", e)
-    })?;
+    let response = create_request_with_headers(&client, reqwest::Method::GET, &download_api_url)
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to call download API for addon {}: {}", addon_id, e);
+            format!("Failed to call download API: {}", e)
+        })?;
 
     let status = response.status();
     log::debug!(
@@ -1777,21 +1759,18 @@ pub fn remove_addon_from_staging(addon_id: &str, base_dir: impl AsRef<Path>) -> 
 }
 
 /// Fetch available addons from the store API
-pub async fn fetch_addon_store_listings(
-    instance_id: Option<&str>,
-) -> Result<Vec<serde_json::Value>, String> {
+pub async fn fetch_addon_store_listings() -> Result<Vec<serde_json::Value>, String> {
     // Fetch all addons and let frontend filter by status
     let api_url = ADDON_STORE_API_BASE_URL.to_string();
 
     let client = reqwest::Client::new();
-    let response =
-        create_request_with_headers(&client, reqwest::Method::GET, &api_url, instance_id)
-            .send()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to fetch addon store listings: {}", e);
-                format!("Failed to fetch addon store listings: {}", e)
-            })?;
+    let response = create_request_with_headers(&client, reqwest::Method::GET, &api_url)
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to fetch addon store listings: {}", e);
+            format!("Failed to fetch addon store listings: {}", e)
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -1845,7 +1824,7 @@ pub async fn submit_addon_rating(
     addon_id: &str,
     rating: u8,
     review: Option<String>,
-    instance_id: &str,
+    rating_instance_id: &str,
 ) -> Result<serde_json::Value, String> {
     validate_addon_id(addon_id)?;
     if !(1..=5).contains(&rating) {
@@ -1863,15 +1842,15 @@ pub async fn submit_addon_rating(
     }
 
     let client = reqwest::Client::new();
-    let response =
-        create_request_with_headers(&client, reqwest::Method::POST, &api_url, Some(instance_id))
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to submit rating for addon {}: {}", addon_id, e);
-                format!("Failed to submit rating: {}", e)
-            })?;
+    let response = create_request_with_headers(&client, reqwest::Method::POST, &api_url)
+        .header("X-Instance-Id", rating_instance_id)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| {
+            log::error!("Failed to submit rating for addon {}: {}", addon_id, e);
+            format!("Failed to submit rating: {}", e)
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -1908,19 +1887,19 @@ pub async fn submit_addon_rating(
 /// Service for addon management operations.
 pub struct AddonService {
     addons_root: PathBuf,
-    instance_id: String,
+    rating_instance_id: String,
     storage_repo: Arc<dyn AddonStorageRepositoryTrait>,
 }
 
 impl AddonService {
     pub fn new(
         addons_root: impl Into<PathBuf>,
-        instance_id: impl Into<String>,
+        rating_instance_id: impl Into<String>,
         storage_repo: Arc<dyn AddonStorageRepositoryTrait>,
     ) -> Self {
         Self {
             addons_root: addons_root.into(),
-            instance_id: instance_id.into(),
+            rating_instance_id: rating_instance_id.into(),
             storage_repo,
         }
     }
@@ -2583,7 +2562,7 @@ impl AddonServiceTrait for AddonService {
     async fn check_addon_update(&self, addon_id: &str) -> Result<AddonUpdateCheckResult, String> {
         let addon_dir = self.existing_addon_dir(addon_id)?;
         let manifest = self.read_manifest_or_error(&addon_dir)?;
-        check_addon_update_from_api(addon_id, &manifest.version, Some(&self.instance_id)).await
+        check_addon_update_from_api(addon_id, &manifest.version).await
     }
 
     async fn check_all_addon_updates(&self) -> Result<Vec<AddonUpdateCheckResult>, String> {
@@ -2612,13 +2591,7 @@ impl AddonServiceTrait for AddonService {
                     }
                 };
                 let addon_id = manifest.id.clone();
-                match check_addon_update_from_api(
-                    &addon_id,
-                    &manifest.version,
-                    Some(&self.instance_id),
-                )
-                .await
-                {
+                match check_addon_update_from_api(&addon_id, &manifest.version).await {
                     Ok(result) => results.push(result),
                     Err(err) => {
                         log::error!("Failed to check update for addon {}: {}", addon_id, err);
@@ -2654,7 +2627,7 @@ impl AddonServiceTrait for AddonService {
             .and_then(|m| m.enabled)
             .unwrap_or(false);
 
-        let zip_data = download_addon_from_store(addon_id, &self.instance_id).await?;
+        let zip_data = download_addon_from_store(addon_id).await?;
         let extracted = extract_addon_zip_archive(zip_data)?;
         if extracted.metadata.id != addon_id {
             return Err(format!(
@@ -2774,7 +2747,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     async fn download_addon_to_staging(&self, addon_id: &str) -> Result<ExtractedAddon, String> {
-        let zip = download_addon_from_store(addon_id, &self.instance_id).await?;
+        let zip = download_addon_from_store(addon_id).await?;
         let _staged_path = save_addon_to_staging(addon_id, &self.addons_root, &zip)?;
         let extracted = extract_addon_zip_internal(zip)?;
         if extracted.metadata.id != addon_id {
@@ -2797,7 +2770,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     async fn fetch_store_listings(&self) -> Result<Vec<serde_json::Value>, String> {
-        fetch_addon_store_listings(Some(&self.instance_id)).await
+        fetch_addon_store_listings().await
     }
 
     async fn submit_rating(
@@ -2806,7 +2779,7 @@ impl AddonServiceTrait for AddonService {
         rating: u8,
         review: Option<String>,
     ) -> Result<serde_json::Value, String> {
-        submit_addon_rating(addon_id, rating, review, &self.instance_id).await
+        submit_addon_rating(addon_id, rating, review, &self.rating_instance_id).await
     }
 
     fn extract_addon_zip(&self, zip_data: Vec<u8>) -> Result<ExtractedAddon, String> {
