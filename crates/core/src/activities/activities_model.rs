@@ -1794,6 +1794,10 @@ pub struct BulkUpsertResult {
     pub updated: usize,
     /// Number of activities skipped (e.g., user-modified)
     pub skipped: usize,
+    /// Asset ids of pre-existing SPLIT rows that were overwritten, so callers can
+    /// emit asset-level split events even when the incoming row is no longer a SPLIT
+    #[serde(skip)]
+    pub updated_split_asset_ids: Vec<String>,
 }
 
 /// Activity ready for persistence

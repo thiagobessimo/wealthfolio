@@ -5479,6 +5479,14 @@ impl ActivityServiceTrait for ActivityService {
                 currencies,
                 earliest_activity_at_utc,
             );
+            // Include pre-existing SPLIT rows that this upsert overwrote (possibly
+            // reclassified or moved to another asset), not just incoming SPLIT rows.
+            let split_asset_ids: Vec<String> = split_asset_ids
+                .into_iter()
+                .chain(result.updated_split_asset_ids.iter().cloned())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
             self.emit_asset_split_change(split_asset_ids, earliest_activity_at_utc);
         }
 
