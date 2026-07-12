@@ -78,6 +78,7 @@ pub fn plan_portfolio_job(events: &[DomainEvent], timezone: &str) -> Option<Port
     let mut account_ids: HashSet<String> = HashSet::new();
     let mut asset_ids: HashSet<String> = HashSet::new();
     let mut has_recalc_event = false;
+    let mut recalculate_all_accounts = false;
     let mut min_activity_at_utc: Option<DateTime<Utc>> = None;
 
     for event in events {
@@ -95,6 +96,23 @@ pub fn plan_portfolio_job(events: &[DomainEvent], timezone: &str) -> Option<Port
                     }
                 }
                 for id in ast_ids {
+                    if !id.is_empty() {
+                        asset_ids.insert(id.clone());
+                    }
+                }
+                min_activity_at_utc = match (min_activity_at_utc, earliest_activity_at_utc) {
+                    (Some(current), Some(new)) => Some(current.min(*new)),
+                    (None, Some(new)) => Some(*new),
+                    (current, None) => current,
+                };
+            }
+            DomainEvent::AssetSplitActivitiesChanged {
+                asset_ids: ids,
+                earliest_activity_at_utc,
+            } => {
+                has_recalc_event = true;
+                recalculate_all_accounts = true;
+                for id in ids {
                     if !id.is_empty() {
                         asset_ids.insert(id.clone());
                     }
@@ -140,6 +158,7 @@ pub fn plan_portfolio_job(events: &[DomainEvent], timezone: &str) -> Option<Port
             }
             DomainEvent::DeviceSyncPullComplete => {
                 has_recalc_event = true;
+                recalculate_all_accounts = true;
             }
             DomainEvent::AssetsUpdated { asset_ids: ids } => {
                 has_recalc_event = true;
@@ -180,7 +199,7 @@ pub fn plan_portfolio_job(events: &[DomainEvent], timezone: &str) -> Option<Port
     }
 
     Some(PortfolioJobConfig {
-        account_ids: if account_ids.is_empty() {
+        account_ids: if recalculate_all_accounts || account_ids.is_empty() {
             None
         } else {
             Some(account_ids.into_iter().collect())
@@ -194,8 +213,11 @@ pub fn plan_portfolio_job(events: &[DomainEvent], timezone: &str) -> Option<Port
         },
         snapshot_mode: SnapshotRecalcMode::Full,
         valuation_mode: ValuationRecalcMode::Full,
-        since_date: min_activity_at_utc
-            .map(|instant| activity_date_in_user_timezone(instant, timezone)),
+        since_date: if recalculate_all_accounts {
+            None
+        } else {
+            min_activity_at_utc.map(|instant| activity_date_in_user_timezone(instant, timezone))
+        },
     })
 }
 
@@ -320,6 +342,24 @@ mod tests {
         } else {
             panic!("Expected Incremental mode");
         }
+    }
+
+    #[test]
+    fn test_split_activity_change_recalculates_all_accounts() {
+        let events = vec![
+            DomainEvent::ActivitiesChanged {
+                account_ids: vec!["edited-account".to_string()],
+                asset_ids: vec!["VGT".to_string()],
+                currencies: vec!["USD".to_string()],
+                earliest_activity_at_utc: None,
+            },
+            DomainEvent::asset_split_activities_changed(vec!["VGT".to_string()], None),
+        ];
+
+        let config = plan_portfolio_job(&events, "UTC").unwrap();
+
+        assert!(config.account_ids.is_none());
+        assert!(config.since_date.is_none());
     }
 
     #[test]

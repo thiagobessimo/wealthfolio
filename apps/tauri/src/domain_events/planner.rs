@@ -82,6 +82,7 @@ pub fn plan_portfolio_job(
     let mut account_ids: HashSet<String> = HashSet::new();
     let mut asset_ids: HashSet<String> = HashSet::new();
     let mut has_recalc_events = false;
+    let mut recalculate_all_accounts = false;
     let mut min_activity_at_utc: Option<DateTime<Utc>> = None;
 
     for event in events {
@@ -95,6 +96,19 @@ pub fn plan_portfolio_job(
                 has_recalc_events = true;
                 account_ids.extend(acc_ids.iter().cloned());
                 asset_ids.extend(a_ids.iter().cloned());
+                min_activity_at_utc = match (min_activity_at_utc, earliest_activity_at_utc) {
+                    (Some(current), Some(new)) => Some(current.min(*new)),
+                    (None, Some(new)) => Some(*new),
+                    (current, None) => current,
+                };
+            }
+            DomainEvent::AssetSplitActivitiesChanged {
+                asset_ids: ids,
+                earliest_activity_at_utc,
+            } => {
+                has_recalc_events = true;
+                recalculate_all_accounts = true;
+                asset_ids.extend(ids.iter().filter(|id| !id.is_empty()).cloned());
                 min_activity_at_utc = match (min_activity_at_utc, earliest_activity_at_utc) {
                     (Some(current), Some(new)) => Some(current.min(*new)),
                     (None, Some(new)) => Some(*new),
@@ -122,6 +136,7 @@ pub fn plan_portfolio_job(
             }
             DomainEvent::DeviceSyncPullComplete => {
                 has_recalc_events = true;
+                recalculate_all_accounts = true;
             }
             DomainEvent::AssetsUpdated { asset_ids: ids } => {
                 has_recalc_events = true;
@@ -163,7 +178,7 @@ pub fn plan_portfolio_job(
     let mut builder = PortfolioRequestPayload::builder();
 
     // Set account IDs if we have specific ones, otherwise None means all
-    if !account_ids.is_empty() {
+    if !recalculate_all_accounts && !account_ids.is_empty() {
         builder = builder.account_ids(Some(account_ids.into_iter().collect()));
     }
 
@@ -176,9 +191,11 @@ pub fn plan_portfolio_job(
         }
     };
     builder = builder.market_sync_mode(sync_mode);
-    builder = builder.since_date(
-        min_activity_at_utc.map(|instant| activity_date_in_user_timezone(instant, timezone)),
-    );
+    builder = builder.since_date(if recalculate_all_accounts {
+        None
+    } else {
+        min_activity_at_utc.map(|instant| activity_date_in_user_timezone(instant, timezone))
+    });
 
     Some(builder.build())
 }
@@ -300,6 +317,24 @@ mod tests {
         assert!(payload.account_ids.is_some());
         let account_ids = payload.account_ids.unwrap();
         assert!(account_ids.contains(&"acc1".to_string()));
+    }
+
+    #[test]
+    fn test_split_activity_change_recalculates_all_accounts() {
+        let events = vec![
+            DomainEvent::ActivitiesChanged {
+                account_ids: vec!["edited-account".to_string()],
+                asset_ids: vec!["VGT".to_string()],
+                currencies: vec!["USD".to_string()],
+                earliest_activity_at_utc: None,
+            },
+            DomainEvent::asset_split_activities_changed(vec!["VGT".to_string()], None),
+        ];
+
+        let payload = plan_portfolio_job(&events, "UTC").unwrap();
+
+        assert!(payload.account_ids.is_none());
+        assert!(payload.since_date.is_none());
     }
 
     #[test]
