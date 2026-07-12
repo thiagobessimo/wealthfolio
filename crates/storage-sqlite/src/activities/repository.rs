@@ -1388,6 +1388,42 @@ impl ActivityRepositoryTrait for ActivityRepository {
         Ok(activities_db.into_iter().map(Activity::from).collect())
     }
 
+    fn get_split_activities_by_asset_ids_in_date_range(
+        &self,
+        asset_ids: &[String],
+        start_utc: DateTime<Utc>,
+        end_exclusive_utc: DateTime<Utc>,
+    ) -> Result<Vec<Activity>> {
+        if asset_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = get_connection(&self.pool)?;
+        let mut results = Vec::new();
+        let start = start_utc.to_rfc3339();
+        let end_exclusive = end_exclusive_utc.to_rfc3339();
+
+        for chunk in chunk_for_sqlite(asset_ids) {
+            let activities_db = activities::table
+                .filter(activities::asset_id.eq_any(chunk))
+                .filter(activities::status.eq("POSTED"))
+                .filter(diesel::dsl::sql::<Bool>(
+                    "COALESCE(activity_type_override, activity_type) = 'SPLIT'",
+                ))
+                .filter(activities::activity_date.ge(&start))
+                .filter(activities::activity_date.lt(&end_exclusive))
+                .select(ActivityDB::as_select())
+                .order(activities::activity_date.asc())
+                .load::<ActivityDB>(&mut conn)
+                .map_err(StorageError::from)?;
+
+            results.extend(activities_db.into_iter().map(Activity::from));
+        }
+
+        results.sort_by_key(|activity| activity.activity_date);
+        Ok(results)
+    }
+
     fn get_transfer_activities_touching_account_ids_in_date_range(
         &self,
         account_ids: &[String],
@@ -2449,6 +2485,34 @@ impl ActivityRepositoryTrait for ActivityRepository {
                     }
                 }
 
+                // Capture pre-images of candidate rows that are effectively SPLIT, so the
+                // service can emit asset-level split events even when the incoming row
+                // reclassifies the activity or moves it to another asset.
+                let candidate_ids: Vec<String> = existing_by_id
+                    .keys()
+                    .cloned()
+                    .chain(existing_by_idemp.values().map(|(id, _)| id.clone()))
+                    .chain(existing_by_source.values().map(|(id, _)| id.clone()))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let existing_split_assets: HashMap<String, String> = if candidate_ids.is_empty() {
+                    HashMap::new()
+                } else {
+                    activities::table
+                        .filter(activities::id.eq_any(&candidate_ids))
+                        .filter(diesel::dsl::sql::<Bool>(
+                            "COALESCE(activity_type_override, activity_type) = 'SPLIT'",
+                        ))
+                        .select((activities::id, activities::asset_id))
+                        .load::<(String, Option<String>)>(tx.conn())
+                        .map_err(StorageError::from)?
+                        .into_iter()
+                        .filter_map(|(id, asset_id)| asset_id.map(|asset_id| (id, asset_id)))
+                        .collect()
+                };
+                let mut updated_split_asset_ids: HashSet<String> = HashSet::new();
+
                 let mut result = BulkUpsertResult::default();
 
                 for mut activity_db in activity_rows {
@@ -2591,6 +2655,11 @@ impl ActivityRepositoryTrait for ActivityRepository {
                                 result.upserted += count;
                                 if will_update {
                                     result.updated += count;
+                                    if let Some(asset_id) =
+                                        existing_split_assets.get(&activity_db.id)
+                                    {
+                                        updated_split_asset_ids.insert(asset_id.clone());
+                                    }
                                 } else {
                                     result.created += count;
                                 }
@@ -2632,6 +2701,7 @@ impl ActivityRepositoryTrait for ActivityRepository {
                     result.skipped
                 );
 
+                result.updated_split_asset_ids = updated_split_asset_ids.into_iter().collect();
                 Ok(result)
             })
             .await
@@ -2826,6 +2896,62 @@ mod tests {
             .count()
             .get_result::<i64>(conn)
             .expect("count outbox")
+    }
+
+    #[tokio::test]
+    async fn split_activity_query_loads_posted_rows_across_accounts() {
+        let (pool, writer) = setup_db();
+        let repo = ActivityRepository::new(pool.clone(), writer);
+
+        {
+            let mut conn = get_connection(&pool).expect("conn");
+            insert_account(&mut conn, "account-1");
+            insert_account(&mut conn, "account-2");
+            insert_account_with_archived(&mut conn, "archived-account", true);
+            diesel::sql_query(
+                "INSERT INTO assets
+                 (id, kind, name, display_code, is_active, quote_mode, quote_ccy,
+                  instrument_type, instrument_symbol, created_at, updated_at)
+                 VALUES ('asset-vgt', 'INVESTMENT', 'VGT', 'VGT', 1, 'MARKET', 'USD',
+                         'EQUITY', 'VGT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .execute(&mut conn)
+            .expect("insert asset");
+            diesel::sql_query(
+                "INSERT INTO activities
+                 (id, account_id, asset_id, activity_type, status, activity_date, amount,
+                  currency, is_user_modified, needs_review, created_at, updated_at)
+                 VALUES
+                 ('split-1', 'account-1', 'asset-vgt', 'SPLIT', 'POSTED',
+                  '2025-12-01T12:00:00Z', '4', 'USD', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                 ('split-2', 'account-2', 'asset-vgt', 'SPLIT', 'POSTED',
+                  '2025-12-01T12:00:00Z', '4', 'USD', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                 ('draft-split', 'account-1', 'asset-vgt', 'SPLIT', 'DRAFT',
+                  '2025-12-01T12:00:00Z', '4', 'USD', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                 ('archived-split', 'archived-account', 'asset-vgt', 'SPLIT', 'POSTED',
+                  '2025-12-01T12:00:00Z', '4', 'USD', 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .execute(&mut conn)
+            .expect("insert activities");
+        }
+
+        let activities = repo
+            .get_split_activities_by_asset_ids_in_date_range(
+                &["asset-vgt".to_string()],
+                DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+                DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            )
+            .unwrap();
+
+        let ids: HashSet<&str> = activities
+            .iter()
+            .map(|activity| activity.id.as_str())
+            .collect();
+        assert_eq!(ids, HashSet::from(["split-1", "split-2", "archived-split"]));
     }
 
     fn insert_holdings_snapshot(
@@ -4507,6 +4633,76 @@ mod tests {
         assert_eq!(rows[0].2.as_deref(), Some("SNAPTRADE"));
         assert_eq!(rows[0].3.as_deref(), Some("txn-1"));
         assert_eq!(rows[0].4.as_deref(), Some("idemp-2"));
+    }
+
+    #[tokio::test]
+    async fn bulk_upsert_reports_overwritten_split_asset_ids() {
+        let (pool, writer) = setup_db();
+        let repo = ActivityRepository::new(pool.clone(), writer);
+
+        {
+            let mut conn = get_connection(&pool).expect("conn");
+            insert_account(&mut conn, "acc-sync");
+            diesel::sql_query(
+                "INSERT INTO assets
+                 (id, kind, name, display_code, is_active, quote_mode, quote_ccy,
+                  instrument_type, instrument_symbol, created_at, updated_at)
+                 VALUES ('asset-vgt', 'INVESTMENT', 'VGT', 'VGT', 1, 'MARKET', 'USD',
+                         'EQUITY', 'VGT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .execute(&mut conn)
+            .expect("insert asset");
+        }
+
+        let split = ActivityUpsert {
+            id: "provider-id-1".to_string(),
+            account_id: "acc-sync".to_string(),
+            asset_id: Some("asset-vgt".to_string()),
+            activity_type: "SPLIT".to_string(),
+            subtype: None,
+            activity_date: "2024-01-15".to_string(),
+            quantity: None,
+            unit_price: None,
+            currency: "USD".to_string(),
+            fee: None,
+            tax: None,
+            amount: Some(Decimal::from(4)),
+            status: None,
+            notes: None,
+            fx_rate: None,
+            metadata: None,
+            needs_review: None,
+            source_system: Some("SNAPTRADE".to_string()),
+            source_record_id: Some("txn-split".to_string()),
+            source_group_id: None,
+            idempotency_key: Some("idemp-1".to_string()),
+            import_run_id: None,
+        };
+        let mut reclassified_to_buy = split.clone();
+        reclassified_to_buy.id = "provider-id-2".to_string();
+        reclassified_to_buy.activity_type = "BUY".to_string();
+        reclassified_to_buy.quantity = Some(Decimal::ONE);
+        reclassified_to_buy.unit_price = Some(Decimal::from(100));
+        reclassified_to_buy.amount = Some(Decimal::from(100));
+        reclassified_to_buy.idempotency_key = Some("idemp-2".to_string());
+
+        let first_result = repo
+            .bulk_upsert(vec![split])
+            .await
+            .expect("split upsert succeeds");
+        assert_eq!(first_result.created, 1);
+        assert!(first_result.updated_split_asset_ids.is_empty());
+
+        let second_result = repo
+            .bulk_upsert(vec![reclassified_to_buy])
+            .await
+            .expect("reclassifying upsert succeeds");
+        assert_eq!(second_result.updated, 1);
+        assert_eq!(
+            second_result.updated_split_asset_ids,
+            vec!["asset-vgt".to_string()],
+            "overwriting an existing SPLIT row must surface its asset id"
+        );
     }
 
     #[tokio::test]

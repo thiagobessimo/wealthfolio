@@ -629,6 +629,43 @@ impl ActivityService {
         ));
     }
 
+    fn emit_asset_split_activities_changed<'a>(
+        &self,
+        activities: impl IntoIterator<Item = &'a Activity>,
+    ) {
+        let split_activities: Vec<&Activity> = activities
+            .into_iter()
+            .filter(|activity| activity.effective_type() == ACTIVITY_TYPE_SPLIT)
+            .collect();
+        let asset_ids: HashSet<String> = split_activities
+            .iter()
+            .filter_map(|activity| activity.asset_id.clone())
+            .collect();
+        if asset_ids.is_empty() {
+            return;
+        }
+
+        self.event_sink
+            .emit(DomainEvent::asset_split_activities_changed(
+                asset_ids.into_iter().collect(),
+                Self::earliest_activity_at_utc(split_activities),
+            ));
+    }
+
+    fn emit_asset_split_change(
+        &self,
+        asset_ids: Vec<String>,
+        earliest_activity_at_utc: Option<DateTime<Utc>>,
+    ) {
+        if !asset_ids.is_empty() {
+            self.event_sink
+                .emit(DomainEvent::asset_split_activities_changed(
+                    asset_ids,
+                    earliest_activity_at_utc,
+                ));
+        }
+    }
+
     /// Sets the domain event sink for this service.
     ///
     /// Events are emitted after successful mutations (create, update, delete).
@@ -3745,6 +3782,7 @@ impl ActivityServiceTrait for ActivityService {
             currencies,
             Some(created.activity_date),
         );
+        self.emit_asset_split_activities_changed(std::iter::once(&created));
 
         Ok(created)
     }
@@ -3893,6 +3931,7 @@ impl ActivityServiceTrait for ActivityService {
             currencies,
             Some(earliest_activity_at_utc),
         );
+        self.emit_asset_split_activities_changed([&existing, &updated]);
 
         Ok(updated)
     }
@@ -3951,6 +3990,7 @@ impl ActivityServiceTrait for ActivityService {
             currencies,
             Some(deleted.activity_date),
         );
+        self.emit_asset_split_activities_changed(std::iter::once(&deleted));
 
         Ok(deleted)
     }
@@ -4212,6 +4252,7 @@ impl ActivityServiceTrait for ActivityService {
         let mut old_asset_ids: HashSet<String> = HashSet::new();
         let mut old_currencies: HashSet<String> = HashSet::new();
         let mut old_activity_dates: Vec<DateTime<Utc>> = Vec::new();
+        let mut old_activities: Vec<Activity> = Vec::new();
 
         let explicit_update_ids: HashSet<String> = request
             .updates
@@ -4324,6 +4365,7 @@ impl ActivityServiceTrait for ActivityService {
                     }
                     old_currencies.insert(existing.currency.clone());
                     old_activity_dates.push(existing.activity_date);
+                    old_activities.push(existing.clone());
                     if let Err(err) = self.hydrate_and_validate_update_against_existing(
                         &mut update_request,
                         &existing,
@@ -4363,6 +4405,7 @@ impl ActivityServiceTrait for ActivityService {
                     }
                     old_currencies.insert(existing.currency.clone());
                     old_activity_dates.push(existing.activity_date);
+                    old_activities.push(existing.clone());
                     valid_delete_ids.push(delete_id.clone());
                 }
                 Err(err) => {
@@ -4442,6 +4485,13 @@ impl ActivityServiceTrait for ActivityService {
                 earliest_activity_at_utc,
             );
         }
+        self.emit_asset_split_activities_changed(
+            old_activities
+                .iter()
+                .chain(persisted.created.iter())
+                .chain(persisted.updated.iter())
+                .chain(persisted.deleted.iter()),
+        );
 
         Ok(persisted)
     }
@@ -5069,6 +5119,13 @@ impl ActivityServiceTrait for ActivityService {
             .into_iter()
             .collect();
         let earliest_at = Self::earliest_new_activity_at_utc(insertable_new_activities.iter());
+        let split_asset_ids: Vec<String> = insertable_new_activities
+            .iter()
+            .filter(|activity| activity.activity_type == ACTIVITY_TYPE_SPLIT)
+            .filter_map(|activity| activity.get_symbol_id().map(str::to_string))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
 
         // ── 9. Insert all non-duplicate activities in one transaction ────────
         let inserted_count = if insertable_new_activities.is_empty() {
@@ -5115,6 +5172,7 @@ impl ActivityServiceTrait for ActivityService {
         // ── 11. Emit events + build ordered result ────────────────────────────
         if inserted_count > 0 {
             self.emit_activities_changed(account_ids, asset_ids, currencies, earliest_at);
+            self.emit_asset_split_change(split_asset_ids, earliest_at);
         }
 
         for (idx, activity) in import_activities_indexed {
@@ -5381,6 +5439,13 @@ impl ActivityServiceTrait for ActivityService {
         }
 
         let earliest_activity_at_utc = Self::earliest_upsert_activity_at_utc(&activities);
+        let split_asset_ids: Vec<String> = activities
+            .iter()
+            .filter(|activity| activity.activity_type == ACTIVITY_TYPE_SPLIT)
+            .filter_map(|activity| activity.asset_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
 
         // Collect unique account_ids, asset_ids, and currencies for the event before the upsert
         let account_ids: Vec<String> = activities
@@ -5414,6 +5479,15 @@ impl ActivityServiceTrait for ActivityService {
                 currencies,
                 earliest_activity_at_utc,
             );
+            // Include pre-existing SPLIT rows that this upsert overwrote (possibly
+            // reclassified or moved to another asset), not just incoming SPLIT rows.
+            let split_asset_ids: Vec<String> = split_asset_ids
+                .into_iter()
+                .chain(result.updated_split_asset_ids.iter().cloned())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            self.emit_asset_split_change(split_asset_ids, earliest_activity_at_utc);
         }
 
         Ok(result)

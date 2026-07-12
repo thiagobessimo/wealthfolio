@@ -2392,6 +2392,7 @@ mod tests {
         let asset_service = Arc::new(MockAssetService::new());
         let fx_service = Arc::new(MockFxService::new());
         let activity_repository = Arc::new(MockActivityRepository::new());
+        let event_sink = Arc::new(MockDomainEventSink::new());
 
         account_service.add_account(create_test_account("acc-1", "USD"));
         asset_service.add_asset(create_test_asset("AAPL", "USD"));
@@ -2402,7 +2403,8 @@ mod tests {
             asset_service,
             fx_service,
             Arc::new(MockQuoteService),
-        );
+        )
+        .with_event_sink(event_sink.clone());
 
         let new_activity = NewActivity {
             id: Some("split-1".to_string()),
@@ -2436,6 +2438,11 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().amount, Some(dec!(2)));
+        assert!(event_sink.events().iter().any(|event| matches!(
+            event,
+            DomainEvent::AssetSplitActivitiesChanged { asset_ids, .. }
+                if asset_ids == &["AAPL".to_string()]
+        )));
     }
 
     #[tokio::test]

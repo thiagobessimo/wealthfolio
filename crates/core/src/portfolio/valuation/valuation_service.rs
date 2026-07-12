@@ -1,6 +1,6 @@
 use crate::activities::{
-    Activity, ActivityRepositoryTrait, TransferPairResolution, ACTIVITY_TYPE_SPLIT,
-    ACTIVITY_TYPE_TRANSFER_IN, ACTIVITY_TYPE_TRANSFER_OUT, ACTIVITY_TYPE_WITHDRAWAL,
+    Activity, ActivityRepositoryTrait, TransferPairResolution, ACTIVITY_TYPE_TRANSFER_IN,
+    ACTIVITY_TYPE_TRANSFER_OUT, ACTIVITY_TYPE_WITHDRAWAL,
 };
 use crate::errors::{CalculatorError, Error as CoreError, Result as CoreResult};
 use crate::fx::currency::normalize_currency_code;
@@ -991,9 +991,113 @@ impl ValuationService {
         adjusted_distance < raw_distance
     }
 
-    fn quote_adjusted_split_events_for_account(
+    fn split_activity_source_rank(activity: &Activity) -> u8 {
+        if activity.is_user_modified {
+            return 3;
+        }
+
+        match activity
+            .source_system
+            .as_deref()
+            .map(str::trim)
+            .filter(|source| !source.is_empty())
+        {
+            None => 3,
+            Some(source)
+                if source.eq_ignore_ascii_case("MANUAL") || source.eq_ignore_ascii_case("CSV") =>
+            {
+                3
+            }
+            Some(source) if source.eq_ignore_ascii_case("GENERATED") => 1,
+            Some(_) => 2,
+        }
+    }
+
+    fn select_shared_split_activities(
+        activities: Vec<Activity>,
+        timezone: chrono_tz::Tz,
+    ) -> Vec<(Activity, NaiveDate, Decimal)> {
+        // Rows for the same real-world split can resolve to adjacent local dates when
+        // sources stamp different times of day, so cluster per asset by date gap
+        // instead of keying on the exact date; two events would apply the factor twice.
+        const MERGE_GAP_DAYS: i64 = 1;
+
+        let mut candidates_by_asset: BTreeMap<String, Vec<(Activity, NaiveDate, Decimal)>> =
+            BTreeMap::new();
+
+        for activity in activities {
+            let Some(asset_id) = activity
+                .asset_id
+                .as_ref()
+                .filter(|asset_id| !asset_id.is_empty())
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(ratio) = Self::split_ratio_from_activity(&activity) else {
+                continue;
+            };
+            let split_date = time_utils::activity_date_in_tz(activity.activity_date, timezone);
+            candidates_by_asset
+                .entry(asset_id)
+                .or_default()
+                .push((activity, split_date, ratio));
+        }
+
+        let mut selected_events = Vec::new();
+        for (asset_id, mut candidates) in candidates_by_asset {
+            candidates.sort_by_key(|(_, split_date, _)| *split_date);
+
+            let mut clusters: Vec<Vec<(Activity, NaiveDate, Decimal)>> = Vec::new();
+            for candidate in candidates {
+                match clusters.last_mut() {
+                    Some(cluster)
+                        if cluster.last().is_some_and(|(_, last_date, _)| {
+                            (candidate.1 - *last_date).num_days() <= MERGE_GAP_DAYS
+                        }) =>
+                    {
+                        cluster.push(candidate);
+                    }
+                    _ => clusters.push(vec![candidate]),
+                }
+            }
+
+            for mut cluster in clusters {
+                cluster.sort_by(|(left, _, _), (right, _, _)| {
+                    Self::split_activity_source_rank(right)
+                        .cmp(&Self::split_activity_source_rank(left))
+                        .then_with(|| right.updated_at.cmp(&left.updated_at))
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+
+                let distinct_ratios: HashSet<Decimal> =
+                    cluster.iter().map(|(_, _, ratio)| *ratio).collect();
+                let Some((selected, split_date, selected_ratio)) = cluster.into_iter().next()
+                else {
+                    continue;
+                };
+                if distinct_ratios.len() > 1 {
+                    let mut ratios: Vec<String> = distinct_ratios
+                        .into_iter()
+                        .map(|ratio| ratio.to_string())
+                        .collect();
+                    ratios.sort();
+                    warn!(
+                        "Conflicting split ratios for asset '{}' on {}: {:?}. Using ratio {} from activity '{}'.",
+                        asset_id, split_date, ratios, selected_ratio, selected.id
+                    );
+                }
+
+                selected_events.push((selected, split_date, selected_ratio));
+            }
+        }
+
+        selected_events
+    }
+
+    fn quote_adjusted_split_events_for_assets(
         &self,
-        account_id: &str,
+        asset_ids: &HashSet<String>,
         start_date: NaiveDate,
         end_date: NaiveDate,
         quote_closes_by_asset_date: &HashMap<String, BTreeMap<NaiveDate, Decimal>>,
@@ -1006,23 +1110,19 @@ impl ValuationService {
             let timezone_guard = self.timezone.read().unwrap();
             time_utils::parse_user_timezone_or_default(&timezone_guard)
         };
-        let account_ids = vec![account_id.to_string()];
         let (start_utc, end_exclusive_utc) =
             Self::activity_query_utc_bounds(Some(start_date), Some(end_date));
-        let activities = activity_repository.get_activities_by_account_ids_in_date_range(
-            &account_ids,
+        let asset_ids: Vec<String> = asset_ids.iter().cloned().collect();
+        let activities = activity_repository.get_split_activities_by_asset_ids_in_date_range(
+            &asset_ids,
             start_utc.expect("start bound is provided"),
             end_exclusive_utc.expect("end bound is provided"),
         )?;
 
         let mut events = Vec::new();
-        let mut seen_events: HashSet<(String, NaiveDate)> = HashSet::new();
-        for activity in activities {
-            if !activity.is_posted() || activity.effective_type() != ACTIVITY_TYPE_SPLIT {
-                continue;
-            }
-
-            let split_date = time_utils::activity_date_in_tz(activity.activity_date, timezone);
+        for (activity, split_date, ratio) in
+            Self::select_shared_split_activities(activities, timezone)
+        {
             if !Self::activity_date_in_range(split_date, Some(start_date), Some(end_date)) {
                 continue;
             }
@@ -1034,17 +1134,12 @@ impl ValuationService {
             else {
                 continue;
             };
-            let Some(ratio) = Self::split_ratio_from_activity(&activity) else {
-                continue;
-            };
-
             if Self::quotes_appear_split_adjusted(
                 quote_closes_by_asset_date,
                 asset_id,
                 split_date,
                 ratio,
-            ) && seen_events.insert((asset_id.clone(), split_date))
-            {
+            ) {
                 events.push(QuoteAdjustedSplitEvent {
                     asset_id: asset_id.clone(),
                     split_date,
@@ -1688,8 +1783,8 @@ impl ValuationServiceTrait for ValuationService {
             calculation_end_date,
         )?;
         let quote_closes_by_asset_date = Self::quote_close_by_asset_date(&quotes_vec);
-        let quote_adjusted_split_events = self.quote_adjusted_split_events_for_account(
-            account_id,
+        let quote_adjusted_split_events = self.quote_adjusted_split_events_for_assets(
+            &required_asset_ids,
             actual_calculation_start_date,
             calculation_end_date,
             &quote_closes_by_asset_date,
@@ -2588,6 +2683,23 @@ mod tests {
         }
     }
 
+    fn split_activity_on_date(
+        id: &str,
+        account_id: &str,
+        asset_id: &str,
+        activity_date: &str,
+        ratio: Decimal,
+        source_system: Option<&str>,
+    ) -> Activity {
+        let mut activity = transfer_activity_on_date(id, "SPLIT", activity_date, account_id);
+        activity.asset_id = Some(asset_id.to_string());
+        activity.quantity = None;
+        activity.unit_price = None;
+        activity.amount = Some(ratio);
+        activity.source_system = source_system.map(str::to_string);
+        activity
+    }
+
     fn transfer_activity(
         activity_type: &str,
         asset_id: Option<&str>,
@@ -2714,6 +2826,161 @@ mod tests {
             date("2025-11-17"),
             dec!(10),
         ));
+    }
+
+    #[test]
+    fn shared_split_selection_deduplicates_matching_account_rows() {
+        let activities = vec![
+            split_activity_on_date(
+                "account-1-split",
+                "account-1",
+                "VGT",
+                "2025-12-01",
+                dec!(4),
+                Some("MANUAL"),
+            ),
+            split_activity_on_date(
+                "account-2-split",
+                "account-2",
+                "VGT",
+                "2025-12-01",
+                dec!(4),
+                Some("SNAPTRADE"),
+            ),
+        ];
+
+        let selected = ValuationService::select_shared_split_activities(activities, chrono_tz::UTC);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0.id, "account-1-split");
+        assert_eq!(selected[0].2, dec!(4));
+    }
+
+    #[test]
+    fn shared_split_selection_uses_same_conflict_winner_for_every_account() {
+        let activities = vec![
+            split_activity_on_date(
+                "losing-valued-account-row",
+                "account-being-valued",
+                "VGT",
+                "2025-12-01",
+                dec!(4.5),
+                Some("SNAPTRADE"),
+            ),
+            split_activity_on_date(
+                "manual-winner",
+                "other-account",
+                "VGT",
+                "2025-12-01",
+                dec!(4),
+                Some("MANUAL"),
+            ),
+        ];
+
+        let selected = ValuationService::select_shared_split_activities(activities, chrono_tz::UTC);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].0.id, "manual-winner");
+        assert_eq!(selected[0].2, dec!(4));
+        let factors = ValuationService::split_price_factors_for_date(
+            date("2025-11-30"),
+            &[QuoteAdjustedSplitEvent {
+                asset_id: "VGT".to_string(),
+                split_date: selected[0].1,
+                ratio: selected[0].2,
+            }],
+        );
+        assert_eq!(factors.get("VGT"), Some(&dec!(4)));
+    }
+
+    #[test]
+    fn shared_split_selection_merges_adjacent_dates_for_same_event() {
+        let activities = vec![
+            split_activity_on_date(
+                "broker-day-before",
+                "account-1",
+                "VGT",
+                "2025-11-30",
+                dec!(4),
+                Some("SNAPTRADE"),
+            ),
+            split_activity_on_date(
+                "manual-winner",
+                "account-2",
+                "VGT",
+                "2025-12-01",
+                dec!(4),
+                Some("MANUAL"),
+            ),
+            split_activity_on_date(
+                "earlier-distinct-split",
+                "account-1",
+                "VGT",
+                "2025-06-15",
+                dec!(2),
+                Some("SNAPTRADE"),
+            ),
+        ];
+
+        let selected = ValuationService::select_shared_split_activities(activities, chrono_tz::UTC);
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].0.id, "earlier-distinct-split");
+        assert_eq!(selected[0].1, date("2025-06-15"));
+        assert_eq!(selected[1].0.id, "manual-winner");
+        assert_eq!(selected[1].1, date("2025-12-01"));
+        assert_eq!(selected[1].2, dec!(4));
+    }
+
+    #[test]
+    fn split_recorded_in_other_account_corrects_pre_sale_valuation() {
+        let selected = ValuationService::select_shared_split_activities(
+            vec![split_activity_on_date(
+                "other-account-split",
+                "other-account",
+                "VGT",
+                "2025-12-01",
+                dec!(4),
+                Some("MANUAL"),
+            )],
+            chrono_tz::UTC,
+        );
+        let quote_closes = ValuationService::quote_close_by_asset_date(&[
+            quote_on_date("VGT", dec!(25), "USD", "2025-11-28"),
+            quote_on_date("VGT", dec!(26), "USD", "2025-12-01"),
+        ]);
+        let (_, split_date, ratio) = &selected[0];
+        assert!(ValuationService::quotes_appear_split_adjusted(
+            &quote_closes,
+            "VGT",
+            *split_date,
+            *ratio,
+        ));
+
+        let factors = ValuationService::split_price_factors_for_date(
+            date("2025-11-28"),
+            &[QuoteAdjustedSplitEvent {
+                asset_id: "VGT".to_string(),
+                split_date: *split_date,
+                ratio: *ratio,
+            }],
+        );
+        let snapshot = snapshot_with_position("2025-11-28", "VGT", dec!(10));
+        let valuation = calculate_valuation_with_price_factors(
+            &snapshot,
+            &HashMap::from([(
+                "VGT".to_string(),
+                quote_on_date("VGT", dec!(25), "USD", "2025-11-28"),
+            )]),
+            &HashMap::new(),
+            &HashMap::new(),
+            date("2025-11-28"),
+            "USD",
+            &factors,
+        )
+        .unwrap();
+
+        assert_eq!(valuation.investment_market_value, dec!(1000));
     }
 
     #[test]

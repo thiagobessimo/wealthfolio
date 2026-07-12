@@ -24,6 +24,13 @@ pub enum DomainEvent {
         earliest_activity_at_utc: Option<DateTime<Utc>>,
     },
 
+    /// Account-level split activities changed. Since split price adjustments are shared by
+    /// asset, every account valuation may need to be rebuilt.
+    AssetSplitActivitiesChanged {
+        asset_ids: Vec<String>,
+        earliest_activity_at_utc: Option<DateTime<Utc>>,
+    },
+
     /// Holdings snapshots were created or updated.
     HoldingsChanged {
         account_ids: Vec<String>,
@@ -97,6 +104,16 @@ impl DomainEvent {
             account_ids,
             asset_ids,
             currencies,
+            earliest_activity_at_utc,
+        }
+    }
+
+    pub fn asset_split_activities_changed(
+        asset_ids: Vec<String>,
+        earliest_activity_at_utc: Option<DateTime<Utc>>,
+    ) -> Self {
+        Self::AssetSplitActivitiesChanged {
+            asset_ids,
             earliest_activity_at_utc,
         }
     }
