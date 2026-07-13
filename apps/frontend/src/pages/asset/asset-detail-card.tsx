@@ -113,7 +113,7 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
     },
     {
       label: averageCostLabel,
-      value: <PriceDisplay value={averagePrice} currency={currency} isHidden={isBalanceHidden} />,
+      value: <AmountDisplay value={averagePrice} currency={currency} isHidden={isBalanceHidden} />,
     },
     { label: t("asset:detailCard.percent_of_portfolio"), value: formatPercent(portfolioPercent) },
   ];

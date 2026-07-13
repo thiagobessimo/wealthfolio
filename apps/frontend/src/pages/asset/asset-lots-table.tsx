@@ -15,6 +15,7 @@ import {
   GainAmount,
   GainPercent,
   PrivacyAmount,
+  formatAmount,
   formatPrice,
   formatPercent,
 } from "@wealthfolio/ui";
@@ -341,7 +342,7 @@ function KpiStrip({
           className={cn("text-foreground", bigAmountClass)}
         />
         <span className="text-muted-foreground text-[11px]">
-          {t("asset:lots.avg", { amount: formatPrice(totals.averageUnitCost, currency) })}
+          {t("asset:lots.avg", { amount: formatAmount(totals.averageUnitCost, currency) })}
         </span>
       </KpiCell>
 
