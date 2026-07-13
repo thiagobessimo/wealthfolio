@@ -100,6 +100,8 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
   const averageCostLabel = isOption
     ? t("asset:detailCard.average_premium")
     : t("asset:detailCard.average_cost");
+  const hasFxEffect =
+    fxEffect !== null && currency.trim().toUpperCase() !== baseCurrency.trim().toUpperCase();
 
   const amountTone = (amount: number | null) => {
     if (amount == null || amount === 0) return "";
@@ -157,13 +159,17 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
       percent: null,
       color: amountTone(income),
     },
-    {
-      label: t("asset:detailCard.fx_effect"),
-      amount: fxEffect,
-      currency: baseCurrency,
-      percent: null,
-      color: amountTone(fxEffect),
-    },
+    ...(hasFxEffect
+      ? [
+          {
+            label: t("asset:detailCard.fx_effect"),
+            amount: fxEffect,
+            currency: baseCurrency,
+            percent: null,
+            color: amountTone(fxEffect),
+          },
+        ]
+      : []),
     {
       label: t("asset:detailCard.price_return"),
       amount: null,
