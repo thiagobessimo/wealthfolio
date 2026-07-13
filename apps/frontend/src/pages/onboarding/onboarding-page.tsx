@@ -1,3 +1,4 @@
+import { ExternalLink } from "@/components/external-link";
 import { StartupError } from "@/components/startup-error";
 import { usePlatform } from "@/hooks/use-platform";
 import { useSettings } from "@/hooks/use-settings";
@@ -147,14 +148,14 @@ const OnboardingPage = () => {
               <div className="order-1 flex flex-col gap-2 sm:order-2 sm:flex-row sm:gap-3">
                 {!isMobile && (
                   <Button asChild variant="outline" className="order-2 sm:order-1">
-                    <a
+                    <ExternalLink
                       href={WEALTHFOLIO_CONNECT_PORTAL_URL}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
                       {t("onboarding:buttons.subscribeConnect")}
                       <Icons.ExternalLink className="ml-1.5 h-4 w-4" />
-                    </a>
+                    </ExternalLink>
                   </Button>
                 )}
                 <Button

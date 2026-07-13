@@ -1,3 +1,4 @@
+import { ExternalLink } from "@/components/external-link";
 import { Card } from "@wealthfolio/ui/components/ui/card";
 import { Icons } from "@wealthfolio/ui/components/ui/icons";
 import React, { useMemo } from "react";
@@ -81,7 +82,7 @@ export const OnboardingConnect: React.FC = () => {
 
       {/* Learn more link */}
       <div className="flex justify-center">
-        <a
+        <ExternalLink
           href="https://wealthfolio.app/connect/"
           target="_blank"
           rel="noopener noreferrer"
@@ -89,7 +90,7 @@ export const OnboardingConnect: React.FC = () => {
         >
           {t("onboarding:connect.learnMore")}
           <Icons.ExternalLink className="h-3.5 w-3.5" />
-        </a>
+        </ExternalLink>
       </div>
     </div>
   );
