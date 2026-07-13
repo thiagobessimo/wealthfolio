@@ -364,7 +364,7 @@ const getColumns = (
           {averagePrice == null ? (
             <span className="text-muted-foreground">-</span>
           ) : (
-            <AmountDisplay
+            <PriceDisplay
               value={averagePrice}
               currency={row.original.localCurrency}
               isHidden={isHidden}
