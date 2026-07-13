@@ -216,7 +216,7 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
         <Separator className="my-3" />
         <div>
           <SectionHeader>{t("asset:detailCard.position")}</SectionHeader>
-          <div className="space-y-1.5 text-sm">
+          <div className="space-y-2 text-sm">
             {positionRows.map(({ label, value }, idx) => (
               <div key={idx} className="flex justify-between">
                 <span className="text-muted-foreground">{label}</span>
@@ -265,7 +265,7 @@ const AssetDetailCard: React.FC<AssetDetailProps> = ({ assetData, className }) =
             <Separator className="my-3" />
             <div>
               <SectionHeader>{t("asset:detailCard.day_range")}</SectionHeader>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2.5">
                 <div className="flex flex-col">
                   <span className="text-muted-foreground text-xs">
                     {t("asset:detailCard.open")}
