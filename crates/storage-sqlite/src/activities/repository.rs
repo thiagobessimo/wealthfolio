@@ -2001,6 +2001,8 @@ impl ActivityRepositoryTrait for ActivityRepository {
                 activities::activity_type,
                 activities::activity_date,
                 activities::amount,
+                activities::quantity,
+                activities::unit_price,
                 activities::currency,
                 activities::metadata,
                 activities::source_group_id,
@@ -2009,6 +2011,8 @@ impl ActivityRepositoryTrait for ActivityRepository {
                 String,
                 String,
                 String,
+                Option<String>,
+                Option<String>,
                 Option<String>,
                 String,
                 Option<String>,
@@ -2025,6 +2029,8 @@ impl ActivityRepositoryTrait for ActivityRepository {
                     activity_type,
                     activity_date_str,
                     amount_str,
+                    quantity_str,
+                    unit_price_str,
                     currency,
                     metadata,
                     source_group_id,
@@ -2041,7 +2047,19 @@ impl ActivityRepositoryTrait for ActivityRepository {
                         })
                         .ok()?;
 
-                    let amount = amount_str.and_then(|s| Decimal::from_str(&s).ok());
+                    let amount = match amount_str {
+                        Some(amount) => Decimal::from_str(&amount).ok(),
+                        None if activity_type == ACTIVITY_TYPE_TRANSFER_IN => {
+                            let quantity =
+                                quantity_str.and_then(|value| Decimal::from_str(&value).ok());
+                            let unit_price =
+                                unit_price_str.and_then(|value| Decimal::from_str(&value).ok());
+                            quantity
+                                .zip(unit_price)
+                                .map(|(quantity, price)| quantity * price)
+                        }
+                        None => None,
+                    };
 
                     Some(ContributionActivity {
                         account_id,
