@@ -25,12 +25,11 @@ body {
 }
 
 /*
- * Ensure root content sits above the background. NOTE: the z-index here pairs
- * with the addon parking layer's z-index in addon-iframe-manager.ts
- * (getParkingRoot) — if this changes, that must too.
+ * Keep the root positioned without creating a stacking context. Normal root
+ * content still paints above the body background, while fixed host navigation
+ * can layer above the body-level add-on iframe parking layer.
  */
 #root {
   position: relative;
-  z-index: 1;
   background-color: transparent;
 }

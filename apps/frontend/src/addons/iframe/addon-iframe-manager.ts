@@ -269,10 +269,9 @@ function getParkingRoot() {
       overflow: "visible",
       pointerEvents: "none",
       position: "fixed",
-      // index.html gives #root `z-index: 1` (splash-screen layering), which
-      // paints the whole app above z-auto body siblings. Match it so this
-      // later sibling wins the tie and addon frames show above page content,
-      // while staying below dialog/toast portals (z-50+).
+      // #root intentionally has no z-index, so this layer paints above normal
+      // page content while fixed host navigation and portals (z-40+) remain
+      // above the add-on frame.
       zIndex: "1",
     });
     document.body.appendChild(root);
